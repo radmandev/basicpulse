@@ -430,13 +430,17 @@ app.post('/bitrix/connector', async (req, res) => {
   const token = p.AUTH_ID || p.access_token || '';
   if (token) {
     try {
-      await saveBitrixConfig({
+      const upd = {
         bitrix_auth_token:       token,
-        bitrix_refresh_token:    p.REFRESH_ID || p.refresh_token || '',
-        bitrix_domain:           p.DOMAIN     || p.domain        || '',
-        bitrix_member_id:        p.member_id  || '',
         bitrix_token_expires_at: new Date(Date.now() + (Number(p.AUTH_EXPIRES || p.expires_in) || 3600) * 1000).toISOString(),
-      });
+      };
+      const domain   = p.DOMAIN    || p.domain    || '';
+      const memberId = p.member_id || p.MEMBER_ID || '';
+      const refresh  = p.REFRESH_ID || p.refresh_token || '';
+      if (domain)   upd.bitrix_domain          = domain;
+      if (memberId) upd.bitrix_member_id        = memberId;
+      if (refresh)  upd.bitrix_refresh_token    = refresh;
+      await saveBitrixConfig(upd);
       console.log('[bitrix/connector] Auth token captured from POST');
     } catch (err) {
       console.error('[bitrix/connector] Token save error:', err.message);
@@ -544,17 +548,30 @@ app.post('/api/bitrix/token', async (req, res) => {
     const { access_token, refresh_token, expires_in, domain, member_id } = req.body;
     if (!access_token) return res.status(400).json({ error: 'access_token required' });
 
-    await saveBitrixConfig({
+    const tokenUpdate = {
       bitrix_auth_token:       access_token,
-      bitrix_refresh_token:    refresh_token || '',
       bitrix_token_expires_at: new Date(Date.now() + (Number(expires_in) || 3600) * 1000).toISOString(),
-      bitrix_domain:           domain        || '',
-      bitrix_member_id:        member_id     || '',
-    });
+    };
+    if (refresh_token) tokenUpdate.bitrix_refresh_token    = refresh_token;
+    if (domain)        tokenUpdate.bitrix_domain           = domain;
+    if (member_id)     tokenUpdate.bitrix_member_id        = member_id;
+    await saveBitrixConfig(tokenUpdate);
 
     res.json({ ok: true });
   } catch (err) {
     console.error('/api/bitrix/token error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Restore a missing domain (one-time recovery when domain got wiped)
+app.post('/api/bitrix/set-domain', async (req, res) => {
+  try {
+    const { domain } = req.body;
+    if (!domain) return res.status(400).json({ error: 'domain required' });
+    await saveBitrixConfig({ bitrix_domain: domain });
+    res.json({ ok: true });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
