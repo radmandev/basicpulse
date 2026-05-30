@@ -414,40 +414,100 @@ app.get('/bitrix/connector', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
 });
 
-// POST — Bitrix24 calls this when user activates/deactivates the connector in Contact Center.
-// The request body contains PLACEMENT=SETTING_CONNECTOR and PLACEMENT_OPTIONS JSON.
-// Must respond with "successfully" so Bitrix24 marks the connector as configured.
+// POST — unified handler for all Bitrix24 POSTs to the PLACEMENT_HANDLER URL.
+// Handles: SETTING_CONNECTOR activation, outgoing message events, auth token capture.
 app.post('/bitrix/connector', async (req, res) => {
   const p = req.body;
   console.log('[bitrix/connector POST]', JSON.stringify(p).slice(0, 600));
 
-  // Bitrix24 Contact Center sends PLACEMENT=SETTING_CONNECTOR when user
-  // activates or deactivates the connector from the connector card.
-  // Must respond "successfully" — any other response is treated as failure.
+  // Log to event store for diagnostics
+  const evtName = p.event || p.EVENT || p.PLACEMENT || '';
+  recentBitrixEvents.unshift({ ts: new Date().toISOString(), via: 'connector', event: evtName, body: p });
+  if (recentBitrixEvents.length > 20) recentBitrixEvents.pop();
+
+  // ── Outgoing message: agent replied in Open Line ──────────────────────────
+  const event = p.event || p.EVENT || '';
+  if (event === 'ONIMCONNECTORMESSAGEADD') {
+    res.send('ok');
+    const data = p.data || p.DATA || {};
+    const messages = data?.MESSAGES || data?.messages || [];
+    if (!messages.length) {
+      console.warn('[bitrix/connector] ONIMCONNECTORMESSAGEADD — no MESSAGES:', JSON.stringify(data));
+      return;
+    }
+    try {
+      const { data: settings } = await supabase.from('settings').select('key, value');
+      const s = Object.fromEntries((settings || []).map(r => [r.key, r.value]));
+      if (!s.client_id || !s.client_secret) return;
+
+      const tokenRes = await fetch('https://api.sendpulse.com/oauth/access_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'client_credentials', client_id: s.client_id, client_secret: s.client_secret }),
+      });
+      const { access_token } = await tokenRes.json();
+      if (!access_token) return;
+
+      for (const msg of messages) {
+        const chatId      = msg?.chat?.id || '';
+        const messageText = msg?.message?.text || '';
+        if (!chatId || !messageText) continue;
+
+        const { data: convData } = await supabase
+          .from('conversations').select('*').eq('id', chatId).maybeSingle();
+        if (!convData?.phone || !convData?.bot_id) {
+          console.error('[bitrix/connector] No phone/bot_id for conversation', chatId);
+          continue;
+        }
+
+        const sendRes = await fetch('https://api.sendpulse.com/whatsapp/contacts/sendByPhone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` },
+          body: JSON.stringify({ bot_id: convData.bot_id, phone: convData.phone,
+            message: { type: 'text', text: { body: messageText } } }),
+        });
+
+        if (sendRes.ok) {
+          const ts = Date.now();
+          const { data: msgData } = await supabase.from('messages').insert({
+            conversation_id: chatId, body: messageText, direction: 'out', ts,
+          }).select().single();
+          await supabase.from('conversations').update({ last_message: messageText, last_time: ts }).eq('id', chatId);
+          const { data: conv } = await supabase.from('conversations').select('*').eq('id', chatId).single();
+          broadcast({ type: 'new_message', message: msgData, conversation: conv });
+          console.log('[bitrix/connector] Outbound sent to', convData.phone);
+        } else {
+          console.error('[bitrix/connector] SendPulse error:', await sendRes.text());
+        }
+      }
+    } catch (err) {
+      console.error('[bitrix/connector] ONIMCONNECTORMESSAGEADD error:', err.message);
+    }
+    return;
+  }
+
+  if (event === 'ONIMCONNECTORSTATUSDELETE') {
+    console.log('[bitrix/connector] Chat closed:', JSON.stringify(p.data || {}));
+    return res.send('ok');
+  }
+
+  if (event === 'ONAPPUNINSTALL') {
+    await saveBitrixConfig({ connector_active: false }).catch(() => {});
+    return res.send('ok');
+  }
+
+  // ── Contact Center activation ─────────────────────────────────────────────
   if (p.PLACEMENT === 'SETTING_CONNECTOR' && p.PLACEMENT_OPTIONS) {
     try {
       const opts = typeof p.PLACEMENT_OPTIONS === 'string'
-        ? JSON.parse(p.PLACEMENT_OPTIONS)
-        : p.PLACEMENT_OPTIONS;
-
-      const lineId    = String(opts.LINE || opts.line || '');
-      const activeRaw = opts.ACTIVE_STATUS ?? opts.active_status ?? 1;
-      const active    = String(parseInt(activeRaw, 10) || 0); // '0' or '1'
-
+        ? JSON.parse(p.PLACEMENT_OPTIONS) : p.PLACEMENT_OPTIONS;
+      const lineId = String(opts.LINE || opts.line || '');
+      const active = String(parseInt(opts.ACTIVE_STATUS ?? opts.active_status ?? 1, 10) || 0);
       console.log('[bitrix/connector] SETTING_CONNECTOR — line:', lineId, 'active:', active);
-
       const cfg = await getBitrixConfig();
       if (cfg?.bitrix_auth_token && lineId) {
-        await callBitrix(cfg, 'imconnector.activate', {
-          CONNECTOR: 'basicpulse',
-          LINE:      lineId,
-          ACTIVE:    active,
-        });
-        await saveBitrixConfig({
-          open_channel_id:  lineId,
-          connector_active: active === '1',
-        });
-        console.log('[bitrix/connector] Activated connector for line', lineId);
+        await callBitrix(cfg, 'imconnector.activate', { CONNECTOR: 'basicpulse', LINE: lineId, ACTIVE: active });
+        await saveBitrixConfig({ open_channel_id: lineId, connector_active: active === '1' });
       }
     } catch (err) {
       console.error('[bitrix/connector] SETTING_CONNECTOR error:', err.message);
@@ -455,8 +515,7 @@ app.post('/bitrix/connector', async (req, res) => {
     return res.send('successfully');
   }
 
-  // All other POSTs (Bitrix24 opening the slider with auth tokens, or BX24.getAuth)
-  // — save any auth token present, then serve the HTML settings page.
+  // ── Auth token capture (slider open / install) ────────────────────────────
   const token = p.AUTH_ID || p.access_token || '';
   if (token) {
     try {
@@ -467,11 +526,11 @@ app.post('/bitrix/connector', async (req, res) => {
       const domain   = p.DOMAIN    || p.domain    || '';
       const memberId = p.member_id || p.MEMBER_ID || '';
       const refresh  = p.REFRESH_ID || p.refresh_token || '';
-      if (domain)   upd.bitrix_domain          = domain;
-      if (memberId) upd.bitrix_member_id        = memberId;
-      if (refresh)  upd.bitrix_refresh_token    = refresh;
+      if (domain)   upd.bitrix_domain       = domain;
+      if (memberId) upd.bitrix_member_id    = memberId;
+      if (refresh)  upd.bitrix_refresh_token = refresh;
       await saveBitrixConfig(upd);
-      console.log('[bitrix/connector] Auth token captured from POST');
+      console.log('[bitrix/connector] Auth token captured');
     } catch (err) {
       console.error('[bitrix/connector] Token save error:', err.message);
     }

@@ -150,14 +150,23 @@ async function registerConnector(config, appUrl) {
 }
 
 async function registerEventHandlers(config, appUrl) {
+  // Bind to /bitrix/connector — same URL as PLACEMENT_HANDLER, matching the
+  // Bitrix24 tutorial pattern. Bitrix24 routes ONIMCONNECTORMESSAGEADD to the
+  // PLACEMENT_HANDLER, not necessarily to a separate event.bind URL.
   for (const event of [
     'ONIMCONNECTORMESSAGEADD',
     'ONIMCONNECTORSTATUSDELETE',
     'ONAPPUNINSTALL',
   ]) {
+    try {
+      await callBitrix(config, 'event.unbind', {
+        EVENT:   event,
+        HANDLER: `${appUrl}/bitrix/event`,
+      });
+    } catch (_) {}
     await callBitrix(config, 'event.bind', {
-      EVENT: event,
-      HANDLER: `${appUrl}/bitrix/event`,
+      EVENT:   event,
+      HANDLER: `${appUrl}/bitrix/connector`,
     });
   }
 }
