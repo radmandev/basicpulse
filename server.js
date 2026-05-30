@@ -30,11 +30,19 @@ app.post('/webhook', async (req, res) => {
     recentPayloads.unshift({ ts: Date.now(), payload });
     if (recentPayloads.length > 20) recentPayloads.pop();
 
-    const contactId   = String(payload.contact?.id || payload.subscriber_id || payload.from || 'unknown');
-    const contactName = payload.contact?.name || payload.subscriber?.name || payload.from || 'Unknown';
-    const text        = payload.message?.text || payload.text || payload.body || '';
-    const channel     = payload.channel_type || payload.channel || payload.type || 'unknown';
-    const ts          = payload.ts ? new Date(payload.ts).getTime() : Date.now();
+    // SendPulse sends an array; unwrap it
+    const item = Array.isArray(payload) ? payload[0] : payload;
+
+    const contactId   = String(item.contact?.id || item.contact?.phone || item.subscriber_id || item.from || 'unknown');
+    const contactName = item.contact?.name || item.subscriber?.name || 'Unknown';
+    const text        = item.info?.message?.channel_data?.message?.text?.body
+                     || item.message?.text
+                     || item.text
+                     || item.body
+                     || '';
+    const channel     = item.service || item.channel_type || item.channel || 'unknown';
+    // SendPulse date is Unix seconds; convert to ms
+    const ts          = item.date ? item.date * 1000 : Date.now();
 
     if (!text) {
       console.log('[webhook] skipped — no text found in payload');
