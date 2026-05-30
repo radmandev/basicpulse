@@ -391,25 +391,9 @@ app.post('/bitrix/connector', async (req, res) => {
   const p = req.body;
   console.log('[bitrix/connector POST]', JSON.stringify(p).slice(0, 600));
 
-  // Auth token capture (install flow or BX24.getAuth() via form post)
-  const token = p.AUTH_ID || p.access_token || '';
-  if (token) {
-    try {
-      await saveBitrixConfig({
-        bitrix_auth_token:       token,
-        bitrix_refresh_token:    p.REFRESH_ID || p.refresh_token || '',
-        bitrix_domain:           p.DOMAIN     || p.domain        || '',
-        bitrix_member_id:        p.member_id  || '',
-        bitrix_token_expires_at: new Date(Date.now() + (Number(p.AUTH_EXPIRES || p.expires_in) || 3600) * 1000).toISOString(),
-      });
-      console.log('[bitrix/connector] Auth token captured');
-    } catch (err) {
-      console.error('[bitrix/connector] Token save error:', err.message);
-    }
-  }
-
   // Bitrix24 Contact Center sends PLACEMENT=SETTING_CONNECTOR when user
   // activates or deactivates the connector from the connector card.
+  // Must respond "successfully" — any other response is treated as failure.
   if (p.PLACEMENT === 'SETTING_CONNECTOR' && p.PLACEMENT_OPTIONS) {
     try {
       const opts = typeof p.PLACEMENT_OPTIONS === 'string'
@@ -441,7 +425,25 @@ app.post('/bitrix/connector', async (req, res) => {
     return res.send('successfully');
   }
 
-  res.send('ok');
+  // All other POSTs (Bitrix24 opening the slider with auth tokens, or BX24.getAuth)
+  // — save any auth token present, then serve the HTML settings page.
+  const token = p.AUTH_ID || p.access_token || '';
+  if (token) {
+    try {
+      await saveBitrixConfig({
+        bitrix_auth_token:       token,
+        bitrix_refresh_token:    p.REFRESH_ID || p.refresh_token || '',
+        bitrix_domain:           p.DOMAIN     || p.domain        || '',
+        bitrix_member_id:        p.member_id  || '',
+        bitrix_token_expires_at: new Date(Date.now() + (Number(p.AUTH_EXPIRES || p.expires_in) || 3600) * 1000).toISOString(),
+      });
+      console.log('[bitrix/connector] Auth token captured from POST');
+    } catch (err) {
+      console.error('[bitrix/connector] Token save error:', err.message);
+    }
+  }
+
+  res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
 });
 
 // Explicitly registers the connector and returns each step's result or error

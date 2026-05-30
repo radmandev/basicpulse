@@ -102,7 +102,9 @@ const CONNECTOR_ICON = 'data:image/svg+xml,' + encodeURIComponent(
 );
 
 async function registerConnector(config, appUrl) {
-  // Register the connector type
+  // Register (or re-register) the connector type.
+  // NOTE: re-calling imconnector.register resets Bitrix24's activation state
+  // for all Open Lines, so we re-activate below if already configured.
   await callBitrix(config, 'imconnector.register', {
     ID:                CONNECTOR_ID,
     NAME:              'BasicPulse',
@@ -111,6 +113,20 @@ async function registerConnector(config, appUrl) {
     PLACEMENT_HANDLER: `${appUrl}/bitrix/connector`,
     COMMENT:           'WhatsApp connector via SendPulse',
   });
+
+  // Re-activate if this connector was previously active for an Open Line,
+  // since imconnector.register resets activation state in Bitrix24.
+  if (config.open_channel_id && config.connector_active) {
+    try {
+      await callBitrix(config, 'imconnector.activate', {
+        CONNECTOR: CONNECTOR_ID,
+        LINE:      String(config.open_channel_id),
+        ACTIVE:    '1',
+      });
+    } catch (e) {
+      console.warn('[registerConnector] re-activate failed:', e.message);
+    }
+  }
 
   // Unbind first so we can update GROUP_NAME and other options cleanly
   try {
