@@ -127,11 +127,16 @@ async function registerConnector(config, appUrl) {
   });
 
   // Bind to Contact Center so the connector card appears there
-  await callBitrix(config, 'placement.bind', {
-    PLACEMENT: 'CONTACT_CENTER',
-    HANDLER:   `${appUrl}/bitrix/connector`,
-    TITLE:     'BasicPulse',
-  });
+  // "already binded" is not an error — it means it was registered before
+  try {
+    await callBitrix(config, 'placement.bind', {
+      PLACEMENT: 'CONTACT_CENTER',
+      HANDLER:   `${appUrl}/bitrix/connector`,
+      TITLE:     'BasicPulse',
+    });
+  } catch (err) {
+    if (!err.message.includes('already binded')) throw err;
+  }
 }
 
 async function registerEventHandlers(config, appUrl) {

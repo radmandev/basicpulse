@@ -149,11 +149,12 @@
     fetch('/api/bitrix/register', { method: 'POST' })
       .then(r => r.json())
       .then(d => {
-        const regOk  = d.imconnector_register === 'ok';
-        const regErr = d.imconnector_register_error;
-        if (regErr) showToast('Register error: ' + regErr);
-        else showToast('Registered! Refresh Contact Center in Bitrix24.');
-        console.log('[register]', d);
+        console.log('[register result]', d);
+        if (d.imconnector_register_error) {
+          showToast('Register failed: ' + d.imconnector_register_error);
+        } else {
+          showToast('Connector registered! Hard-refresh Contact Center in Bitrix24 (Ctrl+Shift+R)');
+        }
       })
       .catch(() => showToast('Request failed'));
   });
