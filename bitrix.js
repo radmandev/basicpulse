@@ -40,9 +40,15 @@ async function ensureFreshToken(config) {
 }
 
 async function refreshToken(config) {
-  // Token refresh always goes to oauth.bitrix.info, not the portal domain
+  // Local apps (ID starts with 'local.') refresh on the portal domain.
+  // Marketplace apps refresh on oauth.bitrix.info.
+  const isLocal = (config.bitrix_app_id || '').startsWith('local.');
+  const base = isLocal
+    ? `https://${config.bitrix_domain}/oauth/token/`
+    : `https://oauth.bitrix.info/oauth/token/`;
+
   const url =
-    `https://oauth.bitrix.info/oauth/token/` +
+    base +
     `?grant_type=refresh_token` +
     `&client_id=${encodeURIComponent(config.bitrix_app_id)}` +
     `&client_secret=${encodeURIComponent(config.bitrix_client_secret)}` +

@@ -401,6 +401,33 @@ app.all('/bitrix/connector', async (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
 });
 
+// Sends a test message to the connected Bitrix24 Open Line — confirms delivery end-to-end
+app.post('/api/bitrix/test-message', async (_req, res) => {
+  try {
+    const cfg = await getBitrixConfig();
+    if (!cfg?.bitrix_auth_token) return res.status(400).json({ error: 'Not connected to Bitrix24' });
+    if (!cfg?.open_channel_id)  return res.status(400).json({ error: 'No open line configured' });
+
+    await callBitrix(cfg, 'imconnector.send.message', {
+      CONNECTOR: 'basicpulse',
+      LINE:      String(cfg.open_channel_id),
+      MESSAGES: [{
+        id:   String(Date.now()),
+        chat: { id: 'test-contact', name: 'BasicPulse Test', url: '' },
+        user: { id: 'test-contact', name: 'BasicPulse Test', phone: '', picture: '', url: '' },
+        message: { text: '✅ Test message from BasicPulse — connection is working!', files: [] },
+        chat_message_status: 'received',
+        timestamp: Math.floor(Date.now() / 1000),
+      }],
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[test-message]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Shows the raw request Bitrix24 sent to /bitrix/install — open in browser after reinstalling
 app.get('/api/bitrix/install-debug', (_req, res) => {
   if (!lastInstallRequest) {

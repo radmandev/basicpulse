@@ -46,6 +46,8 @@
       <button class="save-btn" id="activate-btn">Activate connector</button>
       <button class="save-btn" id="deactivate-btn"
         style="background:var(--muted);display:none">Deactivate</button>
+      <button class="save-btn" id="test-btn"
+        style="background:#16a34a;display:none">Send test message</button>
     </div>
 
     <hr style="border:none;border-top:1px solid var(--border);margin:0" />
@@ -83,20 +85,26 @@
       .then(r => r.json())
       .then(data => {
         const deactivateBtn = document.getElementById('deactivate-btn');
+        const testBtn       = document.getElementById('test-btn');
         const activateBtn   = document.getElementById('activate-btn');
 
         if (!data.connected) {
-          setBanner('❌  Bitrix24 app not installed — install the app first, then return here.', '#ef4444');
+          setBanner('❌  Not connected — open this page from inside Bitrix24 to authenticate.', '#ef4444');
           activateBtn.disabled = true;
           return;
         }
+
+        activateBtn.disabled = false;
 
         if (data.connector_active && data.open_channel_id) {
           setBanner(`✅  Connected — routing to Open Line #${data.open_channel_id}`, '#16a34a');
           document.getElementById('channel-id').value = data.open_channel_id;
           deactivateBtn.style.display = '';
+          testBtn.style.display = '';
         } else {
           setBanner(`⚪  Bitrix24 connected (${data.domain}) — connector not yet activated.`);
+          deactivateBtn.style.display = 'none';
+          testBtn.style.display = 'none';
         }
       })
       .catch(() => setBanner('⚠️  Could not reach server.', '#f59e0b'));
@@ -132,11 +140,17 @@
   document.getElementById('deactivate-btn').addEventListener('click', () => {
     fetch('/api/bitrix/disconnect', { method: 'POST' })
       .then(r => r.json())
-      .then(() => {
-        document.getElementById('deactivate-btn').style.display = 'none';
-        showToast('Connector deactivated');
-        loadStatus();
-      });
+      .then(() => { showToast('Connector deactivated'); loadStatus(); });
+  });
+
+  document.getElementById('test-btn').addEventListener('click', () => {
+    fetch('/api/bitrix/test-message', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) showToast('Test message sent — check Bitrix24 Open Line #' + document.getElementById('channel-id').value);
+        else showToast('Error: ' + (d.error || 'unknown'));
+      })
+      .catch(() => showToast('Request failed'));
   });
 
   // Load status immediately — don't block on BX24 initializing
