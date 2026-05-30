@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
-const db = require('./db');
+const supabase = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -11,13 +11,10 @@ const wss = new WebSocket.Server({ server });
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Broadcast to all connected WebSocket clients
 function broadcast(data) {
   const msg = JSON.stringify(data);
   wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg);
-    }
+    if (client.readyState === WebSocket.OPEN) client.send(msg);
   });
 }
 
@@ -25,60 +22,62 @@ function broadcast(data) {
 
 const recentPayloads = [];
 
-app.post('/webhook', (req, res) => {
+app.post('/webhook', async (req, res) => {
   try {
     const payload = req.body;
     console.log('[webhook] received:', JSON.stringify(payload, null, 2));
 
-    // Store raw payload for debugging (last 20)
     recentPayloads.unshift({ ts: Date.now(), payload });
     if (recentPayloads.length > 20) recentPayloads.pop();
 
-    // SendPulse webhook payload shape (adapt as needed per channel)
-    const contactId   = String(payload.contact?.id   || payload.subscriber_id || payload.from || 'unknown');
-    const contactName = payload.contact?.name         || payload.subscriber?.name || payload.from || 'Unknown';
-    const text        = payload.message?.text         || payload.text || payload.body || '';
-    const channel     = payload.channel_type          || payload.channel || payload.type || 'unknown';
-    const ts          = payload.timestamp
-      ? new Date(payload.timestamp).getTime()
-      : Date.now();
+    const contactId   = String(payload.contact?.id || payload.subscriber_id || payload.from || 'unknown');
+    const contactName = payload.contact?.name || payload.subscriber?.name || payload.from || 'Unknown';
+    const text        = payload.message?.text || payload.text || payload.body || '';
+    const channel     = payload.channel_type || payload.channel || payload.type || 'unknown';
+    const ts          = payload.timestamp ? new Date(payload.timestamp).getTime() : Date.now();
 
     if (!text) {
       console.log('[webhook] skipped — no text found in payload');
       return res.status(200).json({ ok: true, skipped: true });
     }
 
-    // Upsert conversation
-    const existing = db.prepare('SELECT id FROM conversations WHERE id = ?').get(contactId);
+    const { data: existing } = await supabase
+      .from('conversations')
+      .select('id, unread')
+      .eq('id', contactId)
+      .maybeSingle();
+
     if (existing) {
-      db.prepare(`
-        UPDATE conversations SET last_message = ?, last_time = ?, unread = unread + 1
-        WHERE id = ?
-      `).run(text, ts, contactId);
+      await supabase.from('conversations').update({
+        last_message: text,
+        last_time: ts,
+        unread: existing.unread + 1,
+      }).eq('id', contactId);
     } else {
-      db.prepare(`
-        INSERT INTO conversations (id, contact_name, channel, last_message, last_time, unread)
-        VALUES (?, ?, ?, ?, ?, 1)
-      `).run(contactId, contactName, channel, text, ts);
+      await supabase.from('conversations').insert({
+        id: contactId,
+        contact_name: contactName,
+        channel,
+        last_message: text,
+        last_time: ts,
+        unread: 1,
+      });
     }
 
-    // Insert message
-    const result = db.prepare(`
-      INSERT INTO messages (conversation_id, text, direction, timestamp)
-      VALUES (?, ?, 'in', ?)
-    `).run(contactId, text, ts);
-
-    const newMessage = {
-      id: result.lastInsertRowid,
+    const { data: msgData } = await supabase.from('messages').insert({
       conversation_id: contactId,
       text,
       direction: 'in',
       timestamp: ts,
-    };
+    }).select().single();
 
-    const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(contactId);
+    const { data: conv } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('id', contactId)
+      .single();
 
-    broadcast({ type: 'new_message', message: newMessage, conversation: conv });
+    broadcast({ type: 'new_message', message: msgData, conversation: conv });
 
     res.status(200).json({ ok: true });
   } catch (err) {
@@ -89,55 +88,59 @@ app.post('/webhook', (req, res) => {
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 
-app.get('/api/conversations', (_req, res) => {
-  const rows = db.prepare(`
-    SELECT * FROM conversations ORDER BY last_time DESC
-  `).all();
-  res.json(rows);
+app.get('/api/conversations', async (_req, res) => {
+  const { data } = await supabase
+    .from('conversations')
+    .select('*')
+    .order('last_time', { ascending: false });
+  res.json(data || []);
 });
 
-app.get('/api/conversations/:id/messages', (req, res) => {
-  const rows = db.prepare(`
-    SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC
-  `).all(req.params.id);
+app.get('/api/conversations/:id/messages', async (req, res) => {
+  const { data } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('conversation_id', req.params.id)
+    .order('timestamp', { ascending: true });
 
-  // Mark as read
-  db.prepare('UPDATE conversations SET unread = 0 WHERE id = ?').run(req.params.id);
+  await supabase.from('conversations').update({ unread: 0 }).eq('id', req.params.id);
 
-  res.json(rows);
+  res.json(data || []);
 });
 
-app.get('/api/settings', (_req, res) => {
-  const rows = db.prepare('SELECT key, value FROM settings').all();
-  const settings = Object.fromEntries(rows.map(r => [r.key, r.value]));
+app.get('/api/settings', async (_req, res) => {
+  const { data } = await supabase.from('settings').select('key, value');
+  const settings = Object.fromEntries((data || []).map(r => [r.key, r.value]));
   res.json(settings);
 });
 
-app.post('/api/settings', (req, res) => {
+app.post('/api/settings', async (req, res) => {
   const { client_id, client_secret } = req.body;
-  const upsert = db.prepare(`
-    INSERT INTO settings (key, value) VALUES (?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `);
-  if (client_id   !== undefined) upsert.run('client_id',   client_id);
-  if (client_secret !== undefined) upsert.run('client_secret', client_secret);
+  if (client_id !== undefined) {
+    await supabase.from('settings').upsert({ key: 'client_id', value: client_id }, { onConflict: 'key' });
+  }
+  if (client_secret !== undefined) {
+    await supabase.from('settings').upsert({ key: 'client_secret', value: client_secret }, { onConflict: 'key' });
+  }
   res.json({ ok: true });
 });
 
 app.get('/api/debug/webhooks', (_req, res) => res.json(recentPayloads));
 
-// ─── Seed credentials from env vars ─────────────────────────────────────────
-
-const upsertSetting = db.prepare(`
-  INSERT INTO settings (key, value) VALUES (?, ?)
-  ON CONFLICT(key) DO UPDATE SET value = excluded.value
-`);
-if (process.env.SENDPULSE_CLIENT_ID)     upsertSetting.run('client_id',     process.env.SENDPULSE_CLIENT_ID);
-if (process.env.SENDPULSE_CLIENT_SECRET) upsertSetting.run('client_secret', process.env.SENDPULSE_CLIENT_SECRET);
-
 // ─── Start ───────────────────────────────────────────────────────────────────
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`BasicPulse running at http://localhost:${PORT}`);
-});
+async function start() {
+  if (process.env.SENDPULSE_CLIENT_ID) {
+    await supabase.from('settings').upsert({ key: 'client_id', value: process.env.SENDPULSE_CLIENT_ID }, { onConflict: 'key' });
+  }
+  if (process.env.SENDPULSE_CLIENT_SECRET) {
+    await supabase.from('settings').upsert({ key: 'client_secret', value: process.env.SENDPULSE_CLIENT_SECRET }, { onConflict: 'key' });
+  }
+
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => {
+    console.log(`BasicPulse running at http://localhost:${PORT}`);
+  });
+}
+
+start();
