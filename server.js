@@ -349,7 +349,8 @@ app.post('/bitrix/event', async (req, res) => {
 });
 
 // Connector configuration page — embedded inside Bitrix24 Contact Center
-app.get('/bitrix/connector', (_req, res) => {
+// Bitrix24 POSTs to the initial installation path, so accept both methods
+app.all('/bitrix/connector', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
 });
 
