@@ -401,6 +401,31 @@ app.all('/bitrix/connector', async (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
 });
 
+// Explicitly registers the connector and returns each step's result or error
+app.post('/api/bitrix/register', async (_req, res) => {
+  try {
+    const cfg    = await getBitrixConfig();
+    if (!cfg?.bitrix_auth_token) return res.status(400).json({ error: 'Not connected — open connector page inside Bitrix24 first' });
+    const appUrl = process.env.APP_URL || 'https://rosybrown-marten-491343.hostingersite.com';
+
+    const results = {};
+
+    try {
+      await registerConnector(cfg, appUrl);
+      results.imconnector_register = 'ok';
+    } catch (e) { results.imconnector_register_error = e.message; }
+
+    try {
+      await registerEventHandlers(cfg, appUrl);
+      results.event_bind = 'ok';
+    } catch (e) { results.event_bind_error = e.message; }
+
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Sends a test message to the connected Bitrix24 Open Line — confirms delivery end-to-end
 app.post('/api/bitrix/test-message', async (_req, res) => {
   try {

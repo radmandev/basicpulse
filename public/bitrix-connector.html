@@ -48,6 +48,8 @@
         style="background:var(--muted);display:none">Deactivate</button>
       <button class="save-btn" id="test-btn"
         style="background:#16a34a;display:none">Send test message</button>
+      <button class="save-btn" id="register-btn"
+        style="background:#6366f1">Register card in Contact Center</button>
     </div>
 
     <hr style="border:none;border-top:1px solid var(--border);margin:0" />
@@ -141,6 +143,19 @@
     fetch('/api/bitrix/disconnect', { method: 'POST' })
       .then(r => r.json())
       .then(() => { showToast('Connector deactivated'); loadStatus(); });
+  });
+
+  document.getElementById('register-btn').addEventListener('click', () => {
+    fetch('/api/bitrix/register', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        const regOk  = d.imconnector_register === 'ok';
+        const regErr = d.imconnector_register_error;
+        if (regErr) showToast('Register error: ' + regErr);
+        else showToast('Registered! Refresh Contact Center in Bitrix24.');
+        console.log('[register]', d);
+      })
+      .catch(() => showToast('Request failed'));
   });
 
   document.getElementById('test-btn').addEventListener('click', () => {
