@@ -229,32 +229,49 @@ app.get('/api/debug/webhooks', (_req, res) => res.json(recentPayloads));
 
 // ─── Bitrix24 ────────────────────────────────────────────────────────────────
 
+// Capture last install request for diagnostics (like recentPayloads for webhooks)
+let lastInstallRequest = null;
+
 // Called by Bitrix24 when the local app is installed
 app.all('/bitrix/install', async (req, res) => {
-  console.log('[bitrix/install] method:', req.method);
-  console.log('[bitrix/install] headers:', JSON.stringify(req.headers));
-  console.log('[bitrix/install] query:', JSON.stringify(req.query));
-  console.log('[bitrix/install] body:', JSON.stringify(req.body));
-
   const p = { ...req.query, ...req.body };
-  const { DOMAIN, AUTH_ID, REFRESH_ID, AUTH_EXPIRES, member_id } = p;
 
-  if (!DOMAIN || !AUTH_ID) {
-    return res.status(400).send('Missing required params: DOMAIN, AUTH_ID');
+  // Capture everything for the debug endpoint
+  lastInstallRequest = {
+    captured_at: new Date().toISOString(),
+    method:      req.method,
+    content_type: req.headers['content-type'] || '',
+    query:       req.query,
+    body:        req.body,
+    merged:      p,
+  };
+  console.log('[bitrix/install] captured:', JSON.stringify(lastInstallRequest));
+
+  // Accept all known Bitrix24 param name variants
+  const DOMAIN    = p.DOMAIN    || p.domain    || '';
+  const AUTH_ID   = p.AUTH_ID   || p.access_token || '';
+  const REFRESH_ID = p.REFRESH_ID || p.refresh_token || '';
+  const AUTH_EXPIRES = p.AUTH_EXPIRES || p.expires_in || '';
+  const member_id = p.member_id || p.MEMBER_ID || '';
+
+  if (!AUTH_ID) {
+    // No token received — still respond 200 so Bitrix24 doesn't error
+    console.warn('[bitrix/install] No AUTH_ID received — body was:', JSON.stringify(p));
+    return res.status(200).json({ status: 'success', note: 'no_token' });
   }
 
   // Prefer credentials already saved via Settings UI; fall back to env vars
-  const existing    = await getBitrixConfig();
-  const appId       = existing?.bitrix_app_id       || process.env.BITRIX_APP_ID       || '';
+  const existing     = await getBitrixConfig();
+  const appId        = existing?.bitrix_app_id        || process.env.BITRIX_APP_ID        || '';
   const clientSecret = existing?.bitrix_client_secret || process.env.BITRIX_CLIENT_SECRET || '';
-  const appUrl      = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+  const appUrl       = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
 
   const config = {
-    bitrix_member_id:        member_id || '',
+    bitrix_member_id:        member_id,
     bitrix_app_id:           appId,
     bitrix_client_secret:    clientSecret,
     bitrix_auth_token:       AUTH_ID,
-    bitrix_refresh_token:    REFRESH_ID || '',
+    bitrix_refresh_token:    REFRESH_ID,
     bitrix_token_expires_at: new Date(Date.now() + (Number(AUTH_EXPIRES) || 3600) * 1000).toISOString(),
     bitrix_domain:           DOMAIN,
     connector_id:            'basicpulse',
@@ -263,23 +280,24 @@ app.all('/bitrix/install', async (req, res) => {
 
   try {
     await saveBitrixConfig(config);
-    console.log('[bitrix] Credentials saved for', DOMAIN);
+    console.log('[bitrix/install] Credentials saved for', DOMAIN);
   } catch (saveErr) {
-    console.error('[bitrix] FAILED to save credentials:', saveErr);
+    console.error('[bitrix/install] FAILED to save:', saveErr.message);
+    lastInstallRequest.save_error = saveErr.message;
     return res.status(200).json({ status: 'error', errors: { save: saveErr.message } });
   }
 
-  // Register connector and event handlers (non-fatal if they fail)
+  // Register connector and event handlers (non-fatal)
   try {
     const saved = await getBitrixConfig();
     await registerConnector(saved, appUrl);
     await registerEventHandlers(saved, appUrl);
-    console.log('[bitrix] Connector + events registered');
+    console.log('[bitrix/install] Connector + events registered');
   } catch (err) {
-    console.error('[bitrix] Post-install setup error:', err.message);
+    console.error('[bitrix/install] Post-install setup error:', err.message);
+    lastInstallRequest.setup_error = err.message;
   }
 
-  // Bitrix24 expects {"status":"success"} — NOT a redirect
   res.status(200).json({ status: 'success' });
 });
 
@@ -365,6 +383,25 @@ app.post('/bitrix/event', async (req, res) => {
 // Bitrix24 POSTs to the initial installation path, so accept both methods
 app.all('/bitrix/connector', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
+});
+
+// Shows the raw request Bitrix24 sent to /bitrix/install — open in browser after reinstalling
+app.get('/api/bitrix/install-debug', (_req, res) => {
+  if (!lastInstallRequest) {
+    return res.json({ called: false, message: 'Handler has not been called since last server start' });
+  }
+  res.json({ called: true, ...lastInstallRequest });
+});
+
+// Tests whether the bitrix_config table exists and is reachable in Supabase
+app.get('/api/bitrix/db-test', async (_req, res) => {
+  try {
+    const { data, error } = await supabase.from('bitrix_config').select('id').limit(1);
+    if (error) return res.json({ ok: false, error: error.message, hint: error.hint || '' });
+    res.json({ ok: true, rows: (data || []).length });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
 });
 
 // Save Bitrix24 App ID + Secret Key entered via the Settings UI
