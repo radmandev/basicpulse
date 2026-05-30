@@ -379,10 +379,19 @@ app.post('/bitrix/event', async (req, res) => {
   }
 });
 
-// Connector configuration page — embedded inside Bitrix24 Contact Center
-// Also captures auth tokens if Bitrix24 POSTs them here (initial install path)
-app.all('/bitrix/connector', async (req, res) => {
-  const p = { ...req.query, ...req.body };
+// GET — opens as the connector settings page inside Bitrix24 (slider/iframe)
+app.get('/bitrix/connector', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
+});
+
+// POST — Bitrix24 calls this when user activates/deactivates the connector in Contact Center.
+// The request body contains PLACEMENT=SETTING_CONNECTOR and PLACEMENT_OPTIONS JSON.
+// Must respond with "successfully" so Bitrix24 marks the connector as configured.
+app.post('/bitrix/connector', async (req, res) => {
+  const p = req.body;
+  console.log('[bitrix/connector POST]', JSON.stringify(p).slice(0, 600));
+
+  // Auth token capture (install flow or BX24.getAuth() via form post)
   const token = p.AUTH_ID || p.access_token || '';
   if (token) {
     try {
@@ -393,12 +402,46 @@ app.all('/bitrix/connector', async (req, res) => {
         bitrix_member_id:        p.member_id  || '',
         bitrix_token_expires_at: new Date(Date.now() + (Number(p.AUTH_EXPIRES || p.expires_in) || 3600) * 1000).toISOString(),
       });
-      console.log('[bitrix/connector] Auth token captured from POST');
+      console.log('[bitrix/connector] Auth token captured');
     } catch (err) {
       console.error('[bitrix/connector] Token save error:', err.message);
     }
   }
-  res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
+
+  // Bitrix24 Contact Center sends PLACEMENT=SETTING_CONNECTOR when user
+  // activates or deactivates the connector from the connector card.
+  if (p.PLACEMENT === 'SETTING_CONNECTOR' && p.PLACEMENT_OPTIONS) {
+    try {
+      const opts = typeof p.PLACEMENT_OPTIONS === 'string'
+        ? JSON.parse(p.PLACEMENT_OPTIONS)
+        : p.PLACEMENT_OPTIONS;
+
+      const lineId    = String(opts.LINE || opts.line || '');
+      const activeRaw = opts.ACTIVE_STATUS ?? opts.active_status ?? 1;
+      const active    = String(parseInt(activeRaw, 10) || 0); // '0' or '1'
+
+      console.log('[bitrix/connector] SETTING_CONNECTOR — line:', lineId, 'active:', active);
+
+      const cfg = await getBitrixConfig();
+      if (cfg?.bitrix_auth_token && lineId) {
+        await callBitrix(cfg, 'imconnector.activate', {
+          CONNECTOR: 'basicpulse',
+          LINE:      lineId,
+          ACTIVE:    active,
+        });
+        await saveBitrixConfig({
+          open_channel_id:  lineId,
+          connector_active: active === '1',
+        });
+        console.log('[bitrix/connector] Activated connector for line', lineId);
+      }
+    } catch (err) {
+      console.error('[bitrix/connector] SETTING_CONNECTOR error:', err.message);
+    }
+    return res.send('successfully');
+  }
+
+  res.send('ok');
 });
 
 // Explicitly registers the connector and returns each step's result or error
