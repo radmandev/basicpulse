@@ -102,9 +102,19 @@
       .catch(() => setBanner('⚠️  Could not reach server.', '#f59e0b'));
   }
 
-  document.getElementById('activate-btn').addEventListener('click', () => {
+  document.getElementById('activate-btn').addEventListener('click', async () => {
     const id = document.getElementById('channel-id').value.trim();
     if (!id) { showToast('Enter an Open Line ID'); return; }
+
+    // Verify we have a Bitrix24 connection before attempting activation
+    let status;
+    try { status = await fetch('/api/bitrix/status').then(r => r.json()); }
+    catch (_) { showToast('Cannot reach server'); return; }
+
+    if (!status.connected) {
+      showToast('Not connected to Bitrix24 yet — open this page from inside Bitrix24 and wait for status to update');
+      return;
+    }
 
     fetch('/api/bitrix/connect', {
       method: 'POST',
@@ -129,27 +139,25 @@
       });
   });
 
-  // BX24 SDK — runs when page is loaded inside Bitrix24
+  // Load status immediately — don't block on BX24 initializing
+  loadStatus();
+
+  // BX24 SDK — try to get a fresh token in the background
   if (typeof BX24 !== 'undefined') {
     BX24.init(function () {
-      BX24.fitWindow();
+      try { BX24.fitWindow(); } catch (_) {}
 
-      // Get a fresh auth token from Bitrix24 and save it to our backend
-      // This is the primary way we obtain tokens — no install handler needed
       BX24.getAuth(function (auth) {
-        if (!auth || !auth.access_token) { loadStatus(); return; }
-
+        if (!auth || !auth.access_token) return;
         fetch('/api/bitrix/token', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify(auth),
         })
-          .then(r => r.json())
           .then(() => loadStatus())
-          .catch(() => loadStatus());
+          .catch(() => {});
       });
 
-      // Auto-detect open line from placement context if available
       try {
         const info = BX24.getPlacementInfo();
         if (info?.options?.LINE) {
@@ -157,9 +165,6 @@
         }
       } catch (_) {}
     });
-  } else {
-    // Loaded outside Bitrix24 (direct browser access)
-    loadStatus();
   }
 </script>
 

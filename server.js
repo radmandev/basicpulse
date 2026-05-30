@@ -380,8 +380,24 @@ app.post('/bitrix/event', async (req, res) => {
 });
 
 // Connector configuration page — embedded inside Bitrix24 Contact Center
-// Bitrix24 POSTs to the initial installation path, so accept both methods
-app.all('/bitrix/connector', (_req, res) => {
+// Also captures auth tokens if Bitrix24 POSTs them here (initial install path)
+app.all('/bitrix/connector', async (req, res) => {
+  const p = { ...req.query, ...req.body };
+  const token = p.AUTH_ID || p.access_token || '';
+  if (token) {
+    try {
+      await saveBitrixConfig({
+        bitrix_auth_token:       token,
+        bitrix_refresh_token:    p.REFRESH_ID || p.refresh_token || '',
+        bitrix_domain:           p.DOMAIN     || p.domain        || '',
+        bitrix_member_id:        p.member_id  || '',
+        bitrix_token_expires_at: new Date(Date.now() + (Number(p.AUTH_EXPIRES || p.expires_in) || 3600) * 1000).toISOString(),
+      });
+      console.log('[bitrix/connector] Auth token captured from POST');
+    } catch (err) {
+      console.error('[bitrix/connector] Token save error:', err.message);
+    }
+  }
   res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
 });
 
