@@ -16,13 +16,15 @@ function connectWS() {
   const ws = new WebSocket(`${protocol}//${location.host}`);
 
   ws.addEventListener('open', () => {
+    wsAlive = true;
     connDot.classList.add('connected');
     connDot.title = 'Connected';
   });
 
   ws.addEventListener('close', () => {
+    wsAlive = false;
     connDot.classList.remove('connected');
-    connDot.title = 'Disconnected — reconnecting…';
+    connDot.title = 'Disconnected — polling…';
     setTimeout(connectWS, 3000);
   });
 
@@ -36,11 +38,28 @@ function connectWS() {
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
+let wsAlive = false;
+
 async function loadConversations() {
   const res  = await fetch('/api/conversations');
-  conversations = await res.json();
+  const fresh = await res.json();
+
+  // Merge: update existing, prepend new ones, preserve active unread=0
+  fresh.forEach(fc => {
+    const idx = conversations.findIndex(c => c.id === fc.id);
+    if (idx >= 0) {
+      conversations[idx] = fc.id === activeId ? { ...fc, unread: 0 } : fc;
+    } else {
+      conversations.unshift(fc);
+      if (fc.unread > 0) showToast(`New message from ${fc.contact_name}`);
+    }
+  });
+  conversations.sort((a, b) => b.last_time - a.last_time);
   renderConvList();
 }
+
+// Poll every 4 s as fallback when WebSocket is down
+setInterval(() => { if (!wsAlive) loadConversations(); }, 4000);
 
 async function loadMessages(convId) {
   const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}/messages`);
