@@ -26,17 +26,21 @@ function broadcast(data) {
 app.post('/webhook', (req, res) => {
   try {
     const payload = req.body;
+    console.log('[webhook] received:', JSON.stringify(payload, null, 2));
 
     // SendPulse webhook payload shape (adapt as needed per channel)
     const contactId   = String(payload.contact?.id   || payload.subscriber_id || payload.from || 'unknown');
     const contactName = payload.contact?.name         || payload.subscriber?.name || payload.from || 'Unknown';
     const text        = payload.message?.text         || payload.text || payload.body || '';
-    const channel     = payload.channel               || payload.type || 'unknown';
+    const channel     = payload.channel_type          || payload.channel || payload.type || 'unknown';
     const ts          = payload.timestamp
       ? new Date(payload.timestamp).getTime()
       : Date.now();
 
-    if (!text) return res.status(200).json({ ok: true, skipped: true });
+    if (!text) {
+      console.log('[webhook] skipped — no text found in payload');
+      return res.status(200).json({ ok: true, skipped: true });
+    }
 
     // Upsert conversation
     const existing = db.prepare('SELECT id FROM conversations WHERE id = ?').get(contactId);
