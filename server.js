@@ -493,12 +493,30 @@ app.post('/api/bitrix/connect', async (req, res) => {
     if (!open_channel_id) return res.status(400).json({ error: 'open_channel_id required' });
 
     const cfg = await getBitrixConfig();
-    if (!cfg) return res.status(400).json({ error: 'Bitrix24 not installed — install the app first' });
+    if (!cfg?.bitrix_auth_token) return res.status(400).json({ error: 'Bitrix24 not connected — open this page inside Bitrix24 first' });
 
+    const appUrl = process.env.APP_URL || 'https://rosybrown-marten-491343.hostingersite.com';
+
+    // Register connector first (safe to call even if already registered)
+    try {
+      await registerConnector(cfg, appUrl);
+    } catch (regErr) {
+      console.warn('[connect] registerConnector:', regErr.message);
+    }
+
+    // Register event handlers
+    try {
+      await registerEventHandlers(cfg, appUrl);
+    } catch (evtErr) {
+      console.warn('[connect] registerEventHandlers:', evtErr.message);
+    }
+
+    // Activate connector for the chosen open line
+    // Correct param is CONNECTOR (not ID)
     await callBitrix(cfg, 'imconnector.activate', {
-      ID:     'basicpulse',
-      LINE:   String(open_channel_id),
-      ACTIVE: 'Y',
+      CONNECTOR: 'basicpulse',
+      LINE:      String(open_channel_id),
+      ACTIVE:    'Y',
     });
 
     await saveBitrixConfig({ open_channel_id: String(open_channel_id), connector_active: true });
@@ -515,9 +533,9 @@ app.post('/api/bitrix/disconnect', async (_req, res) => {
     const cfg = await getBitrixConfig();
     if (cfg?.open_channel_id) {
       await callBitrix(cfg, 'imconnector.activate', {
-        ID:     'basicpulse',
-        LINE:   String(cfg.open_channel_id),
-        ACTIVE: 'N',
+        CONNECTOR: 'basicpulse',
+        LINE:      String(cfg.open_channel_id),
+        ACTIVE:    'N',
       });
     }
     await saveBitrixConfig({ connector_active: false, open_channel_id: null });
