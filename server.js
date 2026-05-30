@@ -118,6 +118,15 @@ app.post('/api/settings', (req, res) => {
   res.json({ ok: true });
 });
 
+// ─── Seed credentials from env vars ─────────────────────────────────────────
+
+const upsertSetting = db.prepare(`
+  INSERT INTO settings (key, value) VALUES (?, ?)
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value
+`);
+if (process.env.SENDPULSE_CLIENT_ID)     upsertSetting.run('client_id',     process.env.SENDPULSE_CLIENT_ID);
+if (process.env.SENDPULSE_CLIENT_SECRET) upsertSetting.run('client_secret', process.env.SENDPULSE_CLIENT_SECRET);
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
