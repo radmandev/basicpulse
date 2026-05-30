@@ -34,12 +34,12 @@
     <div>
       <h2 style="font-size:14px;font-weight:600;margin-bottom:16px;">SendPulse Credentials</h2>
       <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">
-        Optional — stored locally. Used if you later want to send replies via the API.
+        Used to send replies via the API.
       </p>
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div class="field">
           <label for="client-id">Client ID</label>
-          <input type="text" id="client-id" placeholder="e.g. abc123def456" autocomplete="off" />
+          <input type="text" id="client-id" placeholder="e.g. sp_id_…" autocomplete="off" />
         </div>
         <div class="field">
           <label for="client-secret">Client Secret</label>
@@ -55,7 +55,6 @@
 <div class="toast" id="toast"></div>
 
 <script>
-  // Webhook URL display
   const webhookUrl = `${location.origin}/webhook`;
   document.getElementById('webhook-url').textContent = webhookUrl;
 
@@ -63,14 +62,12 @@
     navigator.clipboard.writeText(webhookUrl).then(() => showToast('Copied to clipboard!'));
   });
 
-  // Load saved credentials
   fetch('/api/settings')
     .then(r => r.json())
     .then(s => {
       if (s.client_id) document.getElementById('client-id').value = s.client_id;
     });
 
-  // Save
   document.getElementById('save-btn').addEventListener('click', () => {
     const body = {
       client_id:     document.getElementById('client-id').value.trim(),
@@ -90,9 +87,9 @@
     setTimeout(() => t.classList.remove('show'), 2500);
   }
 
-  // WebSocket connection indicator
   const dot = document.getElementById('conn-dot');
-  const ws = new WebSocket(`ws://${location.host}`);
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${protocol}//${location.host}`);
   ws.addEventListener('open',  () => dot.classList.add('connected'));
   ws.addEventListener('close', () => dot.classList.remove('connected'));
 </script>

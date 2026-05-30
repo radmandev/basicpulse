@@ -133,6 +133,67 @@ app.post('/api/settings', async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/conversations/:id/reply', async (req, res) => {
+  try {
+    const contactId = req.params.id;
+    const { text } = req.body;
+
+    if (!text?.trim()) return res.status(400).json({ error: 'text required' });
+
+    const { data: settings } = await supabase.from('settings').select('key, value');
+    const s = Object.fromEntries((settings || []).map(r => [r.key, r.value]));
+
+    if (!s.client_id || !s.client_secret) {
+      return res.status(400).json({ error: 'SendPulse credentials not configured' });
+    }
+
+    // Get OAuth token
+    const tokenRes = await fetch('https://api.sendpulse.com/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'client_credentials', client_id: s.client_id, client_secret: s.client_secret }),
+    });
+    const { access_token } = await tokenRes.json();
+
+    if (!access_token) return res.status(502).json({ error: 'Could not authenticate with SendPulse' });
+
+    // Send via SendPulse chatbot API
+    const sendRes = await fetch('https://api.sendpulse.com/bot/contacts/sendByContact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` },
+      body: JSON.stringify({
+        contact_id: contactId,
+        messages: [{ type: 'text', message: { text: text.trim() } }],
+      }),
+    });
+
+    if (!sendRes.ok) {
+      const detail = await sendRes.text();
+      console.error('[reply] SendPulse error:', detail);
+      return res.status(502).json({ error: 'SendPulse API error', detail });
+    }
+
+    const ts = Date.now();
+
+    const { data: msgData } = await supabase.from('messages').insert({
+      conversation_id: contactId,
+      body: text.trim(),
+      direction: 'out',
+      ts,
+    }).select().single();
+
+    await supabase.from('conversations').update({ last_message: text.trim(), last_time: ts }).eq('id', contactId);
+
+    const { data: conv } = await supabase.from('conversations').select('*').eq('id', contactId).single();
+    broadcast({ type: 'new_message', message: msgData, conversation: conv });
+
+    res.json({ ok: true, message: msgData });
+  } catch (err) {
+    console.error('Reply error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+
 app.get('/api/debug/webhooks', (_req, res) => res.json(recentPayloads));
 
 // ─── Start ───────────────────────────────────────────────────────────────────

@@ -16,10 +16,10 @@
 </nav>
 
 <div class="layout">
-  <!-- Sidebar: conversation list -->
   <aside class="sidebar">
     <div class="sidebar-header">
       <h2>Conversations</h2>
+      <input type="search" id="search-input" class="search-input" placeholder="Search…" />
     </div>
     <div class="conv-list" id="conv-list">
       <div class="empty-state" id="conv-empty">
@@ -31,7 +31,6 @@
     </div>
   </aside>
 
-  <!-- Thread panel -->
   <main class="thread" id="thread">
     <div class="no-conv" id="no-conv">
       <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
@@ -39,7 +38,17 @@
       </svg>
       <p>Select a conversation to read messages</p>
     </div>
-    <!-- Populated by JS -->
+    <div class="thread-header" id="thread-header" style="display:none"></div>
+    <div class="messages" id="msg-pane" style="display:none"></div>
+    <div class="reply-bar" id="reply-bar" style="display:none">
+      <textarea id="reply-input" class="reply-input" placeholder="Type a reply… (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
+      <button id="reply-send" class="reply-send-btn" title="Send">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </div>
   </main>
 </div>
 
