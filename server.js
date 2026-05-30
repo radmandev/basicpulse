@@ -66,9 +66,9 @@ app.post('/webhook', async (req, res) => {
 
     const { data: msgData } = await supabase.from('messages').insert({
       conversation_id: contactId,
-      text,
+      body: text,
       direction: 'in',
-      ts: ts,
+      ts,
     }).select().single();
 
     const { data: conv } = await supabase

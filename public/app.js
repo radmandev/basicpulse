@@ -139,7 +139,7 @@ function renderBubble(msg) {
   return `
     <div class="msg-row ${msg.direction}">
       <div>
-        <div class="bubble">${escHtml(msg.text)}</div>
+        <div class="bubble">${escHtml(msg.body)}</div>
         <div class="msg-time">${time}</div>
       </div>
     </div>
