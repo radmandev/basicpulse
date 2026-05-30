@@ -35,6 +35,8 @@ app.post('/webhook', async (req, res) => {
 
     const contactId   = String(item.contact?.id || item.contact?.phone || item.subscriber_id || item.from || 'unknown');
     const contactName = item.contact?.name || item.subscriber?.name || 'Unknown';
+    const phone       = String(item.contact?.phone || '');
+    const botId       = item.bot?.id || '';
     const text        = item.info?.message?.channel_data?.message?.text?.body
                      || item.message?.text
                      || item.text
@@ -60,6 +62,8 @@ app.post('/webhook', async (req, res) => {
         last_message: text,
         last_time: ts,
         unread: existing.unread + 1,
+        ...(phone  && { phone }),
+        ...(botId  && { bot_id: botId }),
       }).eq('id', contactId);
     } else {
       await supabase.from('conversations').insert({
@@ -69,6 +73,8 @@ app.post('/webhook', async (req, res) => {
         last_message: text,
         last_time: ts,
         unread: 1,
+        phone,
+        bot_id: botId,
       });
     }
 
@@ -157,13 +163,22 @@ app.post('/api/conversations/:id/reply', async (req, res) => {
 
     if (!access_token) return res.status(502).json({ error: 'Could not authenticate with SendPulse' });
 
-    // Send via SendPulse chatbot API
-    const sendRes = await fetch('https://api.sendpulse.com/bot/contacts/sendByContact', {
+    // Fetch conversation to get phone + bot_id stored from incoming webhook
+    const { data: convData } = await supabase
+      .from('conversations').select('phone, bot_id, channel').eq('id', contactId).single();
+
+    if (!convData?.phone || !convData?.bot_id) {
+      return res.status(400).json({ error: 'Cannot reply — phone or bot_id not yet stored. Send a message to this contact first.' });
+    }
+
+    // Send via SendPulse WhatsApp API
+    const sendRes = await fetch('https://api.sendpulse.com/whatsapp/contacts/sendByPhone', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` },
       body: JSON.stringify({
-        contact_id: contactId,
-        messages: [{ type: 'text', message: { text: text.trim() } }],
+        bot_id: convData.bot_id,
+        phone: convData.phone,
+        message: { type: 'text', text: { body: text.trim() } },
       }),
     });
 
