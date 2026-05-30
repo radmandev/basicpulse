@@ -229,6 +229,9 @@ app.get('/api/debug/webhooks', (_req, res) => res.json(recentPayloads));
 
 // ─── Bitrix24 ────────────────────────────────────────────────────────────────
 
+const recentBitrixEvents = [];
+app.get('/api/bitrix/event-log', (_req, res) => res.json(recentBitrixEvents));
+
 // Capture last install request for diagnostics (like recentPayloads for webhooks)
 let lastInstallRequest = null;
 
@@ -307,7 +310,12 @@ app.post('/bitrix/event', async (req, res) => {
 
   const event = req.body?.event || req.body?.EVENT || '';
   const data  = req.body?.data  || req.body?.DATA  || {};
-  console.log('[bitrix/event]', event, JSON.stringify(data).slice(0, 300));
+
+  // Log every event for diagnostics
+  recentBitrixEvents.unshift({ ts: new Date().toISOString(), event, body: req.body });
+  if (recentBitrixEvents.length > 10) recentBitrixEvents.pop();
+
+  console.log('[bitrix/event]', event, JSON.stringify(req.body).slice(0, 500));
 
   try {
     if (event === 'ONIMCONNECTORMESSAGEADD') {
