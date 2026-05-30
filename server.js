@@ -458,6 +458,30 @@ app.get('/api/bitrix/install-debug', (_req, res) => {
   res.json({ called: true, ...lastInstallRequest });
 });
 
+// Lists all registered imconnectors — confirms basicpulse is in the registry
+app.get('/api/bitrix/connector-list', async (_req, res) => {
+  try {
+    const cfg = await getBitrixConfig();
+    if (!cfg?.bitrix_auth_token) return res.status(400).json({ error: 'Not connected' });
+    const result = await callBitrix(cfg, 'imconnector.list', {});
+    res.json({ ok: true, connectors: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Lists all placement.bind handlers to check CONTACT_CENTER registration
+app.get('/api/bitrix/placement-list', async (_req, res) => {
+  try {
+    const cfg = await getBitrixConfig();
+    if (!cfg?.bitrix_auth_token) return res.status(400).json({ error: 'Not connected' });
+    const result = await callBitrix(cfg, 'placement.get', { PLACEMENT: 'CONTACT_CENTER' });
+    res.json({ ok: true, placements: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Tests whether the bitrix_config table exists and is reachable in Supabase
 app.get('/api/bitrix/db-test', async (_req, res) => {
   try {
