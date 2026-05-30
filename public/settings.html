@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BasicPulse — Settings</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<nav>
+  <a class="brand" href="/">BasicPulse</a>
+  <a href="/">Inbox</a>
+  <a href="/settings.html" class="active">Settings</a>
+  <div id="conn-dot" title="Connecting…"></div>
+</nav>
+
+<div class="settings-wrap">
+  <div class="settings-card">
+    <h1>Settings</h1>
+    <p class="desc">Connect your SendPulse account and register the webhook.</p>
+
+    <div>
+      <h2 style="font-size:14px;font-weight:600;margin-bottom:16px;">Webhook URL</h2>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">
+        Paste this URL into your SendPulse chatbot flow as a <strong>Webhook</strong> action.
+      </p>
+      <div class="webhook-box">
+        <span id="webhook-url">Loading…</span>
+        <button class="copy-btn" id="copy-btn">Copy</button>
+      </div>
+    </div>
+
+    <div>
+      <h2 style="font-size:14px;font-weight:600;margin-bottom:16px;">SendPulse Credentials</h2>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">
+        Optional — stored locally. Used if you later want to send replies via the API.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="field">
+          <label for="client-id">Client ID</label>
+          <input type="text" id="client-id" placeholder="e.g. abc123def456" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="client-secret">Client Secret</label>
+          <input type="password" id="client-secret" placeholder="••••••••••••" autocomplete="off" />
+        </div>
+      </div>
+    </div>
+
+    <button class="save-btn" id="save-btn">Save credentials</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // Webhook URL display
+  const webhookUrl = `${location.origin}/webhook`;
+  document.getElementById('webhook-url').textContent = webhookUrl;
+
+  document.getElementById('copy-btn').addEventListener('click', () => {
+    navigator.clipboard.writeText(webhookUrl).then(() => showToast('Copied to clipboard!'));
+  });
+
+  // Load saved credentials
+  fetch('/api/settings')
+    .then(r => r.json())
+    .then(s => {
+      if (s.client_id) document.getElementById('client-id').value = s.client_id;
+    });
+
+  // Save
+  document.getElementById('save-btn').addEventListener('click', () => {
+    const body = {
+      client_id:     document.getElementById('client-id').value.trim(),
+      client_secret: document.getElementById('client-secret').value.trim(),
+    };
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(() => showToast('Credentials saved'));
+  });
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2500);
+  }
+
+  // WebSocket connection indicator
+  const dot = document.getElementById('conn-dot');
+  const ws = new WebSocket(`ws://${location.host}`);
+  ws.addEventListener('open',  () => dot.classList.add('connected'));
+  ws.addEventListener('close', () => dot.classList.remove('connected'));
+</script>
+
+</body>
+</html>

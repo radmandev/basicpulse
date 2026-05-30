@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BasicPulse — Inbox</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<nav>
+  <a class="brand" href="/">BasicPulse</a>
+  <a href="/" class="active">Inbox</a>
+  <a href="/settings.html">Settings</a>
+  <div id="conn-dot" title="Connecting…"></div>
+</nav>
+
+<div class="layout">
+  <!-- Sidebar: conversation list -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h2>Conversations</h2>
+    </div>
+    <div class="conv-list" id="conv-list">
+      <div class="empty-state" id="conv-empty">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+        <p>No conversations yet.<br/>Waiting for messages…</p>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Thread panel -->
+  <main class="thread" id="thread">
+    <div class="no-conv" id="no-conv">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+      <p>Select a conversation to read messages</p>
+    </div>
+    <!-- Populated by JS -->
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
