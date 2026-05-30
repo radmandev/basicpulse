@@ -311,24 +311,22 @@ app.post('/bitrix/event', async (req, res) => {
 
   try {
     if (event === 'ONIMCONNECTORMESSAGEADD') {
-      // Agent replied inside Bitrix24 — forward to WhatsApp via SendPulse
-      const chatId      = data?.CHAT?.ID || data?.chat?.id || '';
-      const messageText = data?.MESSAGE?.text || data?.message?.text || '';
-
-      if (!chatId || !messageText) return;
-
-      const { data: convData } = await supabase
-        .from('conversations').select('*').eq('id', chatId).maybeSingle();
-
-      if (!convData?.phone || !convData?.bot_id) {
-        console.error('[bitrix/event] No phone/bot_id for conversation', chatId);
+      // Agent replied inside Bitrix24 — forward each message to WhatsApp via SendPulse.
+      // Bitrix24 sends: data.MESSAGES = [{im:{chat_id,message_id}, message:{text}, chat:{id}}]
+      // chat.id is the external ID we supplied when calling imconnector.send.messages.
+      const messages = data?.MESSAGES || data?.messages || [];
+      if (!messages.length) {
+        console.warn('[bitrix/event] ONIMCONNECTORMESSAGEADD with no MESSAGES:', JSON.stringify(data));
         return;
       }
 
-      // Get SendPulse token
+      // Fetch SendPulse credentials once for all messages
       const { data: settings } = await supabase.from('settings').select('key, value');
       const s = Object.fromEntries((settings || []).map(r => [r.key, r.value]));
-      if (!s.client_id || !s.client_secret) return;
+      if (!s.client_id || !s.client_secret) {
+        console.error('[bitrix/event] SendPulse credentials not configured');
+        return;
+      }
 
       const tokenRes = await fetch('https://api.sendpulse.com/oauth/access_token', {
         method: 'POST',
@@ -336,34 +334,58 @@ app.post('/bitrix/event', async (req, res) => {
         body: JSON.stringify({ grant_type: 'client_credentials', client_id: s.client_id, client_secret: s.client_secret }),
       });
       const { access_token } = await tokenRes.json();
-      if (!access_token) return;
+      if (!access_token) {
+        console.error('[bitrix/event] Could not get SendPulse token');
+        return;
+      }
 
-      // Send to WhatsApp
-      const sendRes = await fetch('https://api.sendpulse.com/whatsapp/contacts/sendByPhone', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` },
-        body: JSON.stringify({
-          bot_id: convData.bot_id,
-          phone: convData.phone,
-          message: { type: 'text', text: { body: messageText } },
-        }),
-      });
+      for (const msg of messages) {
+        const chatId      = msg?.chat?.id || '';
+        const messageText = msg?.message?.text || '';
 
-      if (sendRes.ok) {
-        const ts = Date.now();
-        const { data: msgData } = await supabase.from('messages').insert({
-          conversation_id: chatId,
-          body: messageText,
-          direction: 'out',
-          ts,
-        }).select().single();
+        if (!chatId || !messageText) {
+          console.warn('[bitrix/event] Skipping message — missing chat.id or message.text:', JSON.stringify(msg));
+          continue;
+        }
 
-        await supabase.from('conversations')
-          .update({ last_message: messageText, last_time: ts })
-          .eq('id', chatId);
+        const { data: convData } = await supabase
+          .from('conversations').select('*').eq('id', chatId).maybeSingle();
 
-        const { data: conv } = await supabase.from('conversations').select('*').eq('id', chatId).single();
-        broadcast({ type: 'new_message', message: msgData, conversation: conv });
+        if (!convData?.phone || !convData?.bot_id) {
+          console.error('[bitrix/event] No phone/bot_id for conversation', chatId);
+          continue;
+        }
+
+        const sendRes = await fetch('https://api.sendpulse.com/whatsapp/contacts/sendByPhone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` },
+          body: JSON.stringify({
+            bot_id: convData.bot_id,
+            phone:  convData.phone,
+            message: { type: 'text', text: { body: messageText } },
+          }),
+        });
+
+        if (sendRes.ok) {
+          const ts = Date.now();
+          const { data: msgData } = await supabase.from('messages').insert({
+            conversation_id: chatId,
+            body: messageText,
+            direction: 'out',
+            ts,
+          }).select().single();
+
+          await supabase.from('conversations')
+            .update({ last_message: messageText, last_time: ts })
+            .eq('id', chatId);
+
+          const { data: conv } = await supabase.from('conversations').select('*').eq('id', chatId).single();
+          broadcast({ type: 'new_message', message: msgData, conversation: conv });
+          console.log('[bitrix/event] Outbound message sent to', convData.phone);
+        } else {
+          const errText = await sendRes.text();
+          console.error('[bitrix/event] SendPulse send failed:', errText);
+        }
       }
 
     } else if (event === 'ONIMCONNECTORSTATUSDELETE') {
