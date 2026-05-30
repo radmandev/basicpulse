@@ -23,10 +23,16 @@ function broadcast(data) {
 
 // ─── Webhook ────────────────────────────────────────────────────────────────
 
+const recentPayloads = [];
+
 app.post('/webhook', (req, res) => {
   try {
     const payload = req.body;
     console.log('[webhook] received:', JSON.stringify(payload, null, 2));
+
+    // Store raw payload for debugging (last 20)
+    recentPayloads.unshift({ ts: Date.now(), payload });
+    if (recentPayloads.length > 20) recentPayloads.pop();
 
     // SendPulse webhook payload shape (adapt as needed per channel)
     const contactId   = String(payload.contact?.id   || payload.subscriber_id || payload.from || 'unknown');
@@ -117,6 +123,8 @@ app.post('/api/settings', (req, res) => {
   if (client_secret !== undefined) upsert.run('client_secret', client_secret);
   res.json({ ok: true });
 });
+
+app.get('/api/debug/webhooks', (_req, res) => res.json(recentPayloads));
 
 // ─── Seed credentials from env vars ─────────────────────────────────────────
 
