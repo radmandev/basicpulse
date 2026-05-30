@@ -135,7 +135,7 @@ function renderThread(convId, messages) {
 }
 
 function renderBubble(msg) {
-  const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return `
     <div class="msg-row ${msg.direction}">
       <div>

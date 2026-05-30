@@ -34,7 +34,7 @@ app.post('/webhook', async (req, res) => {
     const contactName = payload.contact?.name || payload.subscriber?.name || payload.from || 'Unknown';
     const text        = payload.message?.text || payload.text || payload.body || '';
     const channel     = payload.channel_type || payload.channel || payload.type || 'unknown';
-    const ts          = payload.timestamp ? new Date(payload.timestamp).getTime() : Date.now();
+    const ts          = payload.ts ? new Date(payload.ts).getTime() : Date.now();
 
     if (!text) {
       console.log('[webhook] skipped — no text found in payload');
@@ -68,7 +68,7 @@ app.post('/webhook', async (req, res) => {
       conversation_id: contactId,
       text,
       direction: 'in',
-      timestamp: ts,
+      ts: ts,
     }).select().single();
 
     const { data: conv } = await supabase
@@ -101,7 +101,7 @@ app.get('/api/conversations/:id/messages', async (req, res) => {
     .from('messages')
     .select('*')
     .eq('conversation_id', req.params.id)
-    .order('timestamp', { ascending: true });
+    .order('ts', { ascending: true });
 
   await supabase.from('conversations').update({ unread: 0 }).eq('id', req.params.id);
 
