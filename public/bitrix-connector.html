@@ -142,7 +142,22 @@
     });
   }
 
+  // Auto-poll until connected (Bitrix24 may call /install after loading this page)
+  let pollCount = 0;
+  function pollUntilConnected() {
+    fetch('/api/bitrix/status')
+      .then(r => r.json())
+      .then(d => {
+        if (d.connected) {
+          loadStatus();
+        } else if (pollCount++ < 15) {
+          setTimeout(pollUntilConnected, 2000);
+        }
+      });
+  }
+
   loadStatus();
+  pollUntilConnected();
 </script>
 
 </body>

@@ -254,8 +254,13 @@ app.all('/bitrix/install', async (req, res) => {
     connector_active:        false,
   };
 
-  await saveBitrixConfig(config);
-  console.log('[bitrix] Credentials saved for', DOMAIN);
+  try {
+    await saveBitrixConfig(config);
+    console.log('[bitrix] Credentials saved for', DOMAIN);
+  } catch (saveErr) {
+    console.error('[bitrix] FAILED to save credentials:', saveErr);
+    return res.status(500).send('Failed to save Bitrix24 credentials: ' + saveErr.message);
+  }
 
   // Register connector and event handlers (non-fatal if they fail)
   try {
@@ -352,6 +357,22 @@ app.post('/bitrix/event', async (req, res) => {
 // Bitrix24 POSTs to the initial installation path, so accept both methods
 app.all('/bitrix/connector', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
+});
+
+// Debug endpoint — shows what was saved from the install handler
+app.get('/api/bitrix/debug', async (_req, res) => {
+  const cfg = await getBitrixConfig();
+  if (!cfg) return res.json({ saved: false });
+  res.json({
+    saved: true,
+    domain: cfg.bitrix_domain,
+    member_id: cfg.bitrix_member_id,
+    has_auth_token: !!cfg.bitrix_auth_token,
+    has_refresh_token: !!cfg.bitrix_refresh_token,
+    token_expires_at: cfg.bitrix_token_expires_at,
+    connector_active: cfg.connector_active,
+    open_channel_id: cfg.open_channel_id,
+  });
 });
 
 // Status endpoint — used by the connector page and settings page
