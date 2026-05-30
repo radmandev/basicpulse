@@ -129,10 +129,27 @@
       });
   });
 
-  // BX24 SDK integration — auto-fit and try to detect open line from placement
+  // BX24 SDK — runs when page is loaded inside Bitrix24
   if (typeof BX24 !== 'undefined') {
     BX24.init(function () {
       BX24.fitWindow();
+
+      // Get a fresh auth token from Bitrix24 and save it to our backend
+      // This is the primary way we obtain tokens — no install handler needed
+      BX24.getAuth(function (auth) {
+        if (!auth || !auth.access_token) { loadStatus(); return; }
+
+        fetch('/api/bitrix/token', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(auth),
+        })
+          .then(r => r.json())
+          .then(() => loadStatus())
+          .catch(() => loadStatus());
+      });
+
+      // Auto-detect open line from placement context if available
       try {
         const info = BX24.getPlacementInfo();
         if (info?.options?.LINE) {
@@ -140,24 +157,10 @@
         }
       } catch (_) {}
     });
+  } else {
+    // Loaded outside Bitrix24 (direct browser access)
+    loadStatus();
   }
-
-  // Auto-poll until connected (Bitrix24 may call /install after loading this page)
-  let pollCount = 0;
-  function pollUntilConnected() {
-    fetch('/api/bitrix/status')
-      .then(r => r.json())
-      .then(d => {
-        if (d.connected) {
-          loadStatus();
-        } else if (pollCount++ < 15) {
-          setTimeout(pollUntilConnected, 2000);
-        }
-      });
-  }
-
-  loadStatus();
-  pollUntilConnected();
 </script>
 
 </body>

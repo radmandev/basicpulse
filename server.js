@@ -404,6 +404,27 @@ app.get('/api/bitrix/db-test', async (_req, res) => {
   }
 });
 
+// Receives fresh tokens from BX24.getAuth() called inside the Bitrix24 iframe
+app.post('/api/bitrix/token', async (req, res) => {
+  try {
+    const { access_token, refresh_token, expires_in, domain, member_id } = req.body;
+    if (!access_token) return res.status(400).json({ error: 'access_token required' });
+
+    await saveBitrixConfig({
+      bitrix_auth_token:       access_token,
+      bitrix_refresh_token:    refresh_token || '',
+      bitrix_token_expires_at: new Date(Date.now() + (Number(expires_in) || 3600) * 1000).toISOString(),
+      bitrix_domain:           domain        || '',
+      bitrix_member_id:        member_id     || '',
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('/api/bitrix/token error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Save Bitrix24 App ID + Secret Key entered via the Settings UI
 app.post('/api/bitrix/credentials', async (req, res) => {
   try {
