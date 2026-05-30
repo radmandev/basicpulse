@@ -589,7 +589,7 @@ app.post('/api/bitrix/connect', async (req, res) => {
     await callBitrix(cfg, 'imconnector.activate', {
       CONNECTOR: 'basicpulse',
       LINE:      String(open_channel_id),
-      ACTIVE:    'Y',
+      ACTIVE:    '1',
     });
 
     await saveBitrixConfig({ open_channel_id: String(open_channel_id), connector_active: true });
@@ -608,7 +608,7 @@ app.post('/api/bitrix/disconnect', async (_req, res) => {
       await callBitrix(cfg, 'imconnector.activate', {
         CONNECTOR: 'basicpulse',
         LINE:      String(cfg.open_channel_id),
-        ACTIVE:    'N',
+        ACTIVE:    '0',
       });
     }
     await saveBitrixConfig({ connector_active: false, open_channel_id: null });
