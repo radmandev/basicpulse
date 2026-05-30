@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BasicPulse — Settings</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="//api.bitrix24.com/api/v1/"></script>
 </head>
 <body>
 
@@ -49,6 +50,32 @@
     </div>
 
     <button class="save-btn" id="save-btn">Save credentials</button>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:0" />
+
+    <div>
+      <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;">Bitrix24 Integration</h2>
+      <div id="bx-status" style="
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 500;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        margin-bottom: 12px;
+      ">Checking…</div>
+      <p style="font-size:13px;color:var(--muted);line-height:1.6">
+        To connect Bitrix24, install the local app from your Bitrix24 portal's
+        <strong>Market → Developer Tools → Local Apps</strong>.<br/>
+        Set the Handler URL to <code id="bx-install-url" style="font-size:12px"></code>
+        and the Event Handler URL to <code id="bx-event-url" style="font-size:12px"></code>.<br/>
+        After installing, configure the Open Line at
+        <a id="bx-connector-link" href="/bitrix/connector" target="_blank"
+           style="color:var(--accent)">Connector Settings</a>.
+      </p>
+    </div>
+
   </div>
 </div>
 
@@ -86,6 +113,27 @@
     t.classList.add('show');
     setTimeout(() => t.classList.remove('show'), 2500);
   }
+
+  // Bitrix24 status
+  const origin = location.origin;
+  document.getElementById('bx-install-url').textContent = `${origin}/bitrix/install`;
+  document.getElementById('bx-event-url').textContent   = `${origin}/bitrix/event`;
+
+  fetch('/api/bitrix/status')
+    .then(r => r.json())
+    .then(d => {
+      const el = document.getElementById('bx-status');
+      if (d.connector_active && d.open_channel_id) {
+        el.textContent = `✅  Connected to ${d.domain} — routing to Open Line #${d.open_channel_id}`;
+        el.style.color = '#16a34a';
+      } else if (d.connected) {
+        el.textContent = `⚪  Bitrix24 installed on ${d.domain} — connector not yet activated`;
+        el.style.color = 'var(--text)';
+      } else {
+        el.textContent = '❌  Bitrix24 not installed';
+        el.style.color = '#ef4444';
+      }
+    });
 
   const dot = document.getElementById('conn-dot');
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BasicPulse — Inbox</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="//api.bitrix24.com/api/v1/"></script>
 </head>
 <body>
 
@@ -55,5 +56,10 @@
 <div class="toast" id="toast"></div>
 
 <script src="app.js"></script>
+<script>
+  if (typeof BX24 !== 'undefined') {
+    BX24.init(function () { BX24.fitWindow(); });
+  }
+</script>
 </body>
 </html>

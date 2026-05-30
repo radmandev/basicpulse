@@ -3,12 +3,18 @@ const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
 const supabase = require('./db');
+const {
+  getBitrixConfig, saveBitrixConfig,
+  registerConnector, registerEventHandlers,
+  sendMessageToBitrix, callBitrix,
+} = require('./bitrix');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 function broadcast(data) {
@@ -92,6 +98,16 @@ app.post('/webhook', async (req, res) => {
       .single();
 
     broadcast({ type: 'new_message', message: msgData, conversation: conv });
+
+    // Forward to Bitrix24 Open Channel if connector is active
+    try {
+      const bCfg = await getBitrixConfig();
+      if (bCfg?.connector_active) {
+        await sendMessageToBitrix(bCfg, conv, text, ts);
+      }
+    } catch (bErr) {
+      console.error('[webhook] Bitrix24 forward error:', bErr.message);
+    }
 
     res.status(200).json({ ok: true });
   } catch (err) {
@@ -210,6 +226,185 @@ app.post('/api/conversations/:id/reply', async (req, res) => {
 });
 
 app.get('/api/debug/webhooks', (_req, res) => res.json(recentPayloads));
+
+// ─── Bitrix24 ────────────────────────────────────────────────────────────────
+
+// Called by Bitrix24 when the local app is installed
+app.all('/bitrix/install', async (req, res) => {
+  const p = { ...req.query, ...req.body };
+  const { DOMAIN, AUTH_ID, REFRESH_ID, AUTH_EXPIRES, member_id } = p;
+
+  if (!DOMAIN || !AUTH_ID) {
+    return res.status(400).send('Missing required params: DOMAIN, AUTH_ID');
+  }
+
+  const appId       = process.env.BITRIX_APP_ID || '';
+  const clientSecret = process.env.BITRIX_CLIENT_SECRET || '';
+  const appUrl      = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+
+  const config = {
+    bitrix_member_id:        member_id || '',
+    bitrix_app_id:           appId,
+    bitrix_client_secret:    clientSecret,
+    bitrix_auth_token:       AUTH_ID,
+    bitrix_refresh_token:    REFRESH_ID || '',
+    bitrix_token_expires_at: new Date(Date.now() + (Number(AUTH_EXPIRES) || 3600) * 1000).toISOString(),
+    bitrix_domain:           DOMAIN,
+    connector_id:            'basicpulse',
+    connector_active:        false,
+  };
+
+  await saveBitrixConfig(config);
+  console.log('[bitrix] Credentials saved for', DOMAIN);
+
+  // Register connector and event handlers (non-fatal if they fail)
+  try {
+    const saved = await getBitrixConfig();
+    await registerConnector(saved, appUrl);
+    await registerEventHandlers(saved, appUrl);
+    console.log('[bitrix] Connector + events registered');
+  } catch (err) {
+    console.error('[bitrix] Post-install setup error:', err.message);
+  }
+
+  res.redirect(`https://${DOMAIN}/marketplace/app/?app=${appId || 'basicpulse'}`);
+});
+
+// Called by Bitrix24 for all registered events
+app.post('/bitrix/event', async (req, res) => {
+  res.status(200).json({ ok: true }); // Acknowledge immediately
+
+  const event = req.body?.event || req.body?.EVENT || '';
+  const data  = req.body?.data  || req.body?.DATA  || {};
+  console.log('[bitrix/event]', event, JSON.stringify(data).slice(0, 300));
+
+  try {
+    if (event === 'ONIMCONNECTORMESSAGEADD') {
+      // Agent replied inside Bitrix24 — forward to WhatsApp via SendPulse
+      const chatId      = data?.CHAT?.ID || data?.chat?.id || '';
+      const messageText = data?.MESSAGE?.text || data?.message?.text || '';
+
+      if (!chatId || !messageText) return;
+
+      const { data: convData } = await supabase
+        .from('conversations').select('*').eq('id', chatId).maybeSingle();
+
+      if (!convData?.phone || !convData?.bot_id) {
+        console.error('[bitrix/event] No phone/bot_id for conversation', chatId);
+        return;
+      }
+
+      // Get SendPulse token
+      const { data: settings } = await supabase.from('settings').select('key, value');
+      const s = Object.fromEntries((settings || []).map(r => [r.key, r.value]));
+      if (!s.client_id || !s.client_secret) return;
+
+      const tokenRes = await fetch('https://api.sendpulse.com/oauth/access_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'client_credentials', client_id: s.client_id, client_secret: s.client_secret }),
+      });
+      const { access_token } = await tokenRes.json();
+      if (!access_token) return;
+
+      // Send to WhatsApp
+      const sendRes = await fetch('https://api.sendpulse.com/whatsapp/contacts/sendByPhone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` },
+        body: JSON.stringify({
+          bot_id: convData.bot_id,
+          phone: convData.phone,
+          message: { type: 'text', text: { body: messageText } },
+        }),
+      });
+
+      if (sendRes.ok) {
+        const ts = Date.now();
+        const { data: msgData } = await supabase.from('messages').insert({
+          conversation_id: chatId,
+          body: messageText,
+          direction: 'out',
+          ts,
+        }).select().single();
+
+        await supabase.from('conversations')
+          .update({ last_message: messageText, last_time: ts })
+          .eq('id', chatId);
+
+        const { data: conv } = await supabase.from('conversations').select('*').eq('id', chatId).single();
+        broadcast({ type: 'new_message', message: msgData, conversation: conv });
+      }
+
+    } else if (event === 'ONIMCONNECTORSTATUSDELETE') {
+      const chatId = data?.CHAT?.ID || data?.chat?.id || '';
+      console.log('[bitrix] Chat closed in Bitrix24:', chatId);
+
+    } else if (event === 'ONAPPUNINSTALL') {
+      console.log('[bitrix] App uninstalled — marking connector inactive');
+      await saveBitrixConfig({ connector_active: false });
+    }
+  } catch (err) {
+    console.error('[bitrix/event] handler error:', err);
+  }
+});
+
+// Connector configuration page — embedded inside Bitrix24 Contact Center
+app.get('/bitrix/connector', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
+});
+
+// Status endpoint — used by the connector page and settings page
+app.get('/api/bitrix/status', async (_req, res) => {
+  const cfg = await getBitrixConfig();
+  res.json({
+    connected:       !!cfg?.bitrix_auth_token,
+    domain:          cfg?.bitrix_domain   || null,
+    member_id:       cfg?.bitrix_member_id || null,
+    connector_active: cfg?.connector_active || false,
+    open_channel_id: cfg?.open_channel_id  || null,
+  });
+});
+
+// Activate connector on a specific Bitrix24 Open Line
+app.post('/api/bitrix/connect', async (req, res) => {
+  try {
+    const { open_channel_id } = req.body;
+    if (!open_channel_id) return res.status(400).json({ error: 'open_channel_id required' });
+
+    const cfg = await getBitrixConfig();
+    if (!cfg) return res.status(400).json({ error: 'Bitrix24 not installed — install the app first' });
+
+    await callBitrix(cfg, 'imconnector.activate', {
+      ID:     'basicpulse',
+      LINE:   String(open_channel_id),
+      ACTIVE: 'Y',
+    });
+
+    await saveBitrixConfig({ open_channel_id: String(open_channel_id), connector_active: true });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Bitrix connect error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Deactivate connector
+app.post('/api/bitrix/disconnect', async (_req, res) => {
+  try {
+    const cfg = await getBitrixConfig();
+    if (cfg?.open_channel_id) {
+      await callBitrix(cfg, 'imconnector.activate', {
+        ID:     'basicpulse',
+        LINE:   String(cfg.open_channel_id),
+        ACTIVE: 'N',
+      });
+    }
+    await saveBitrixConfig({ connector_active: false, open_channel_id: null });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 
