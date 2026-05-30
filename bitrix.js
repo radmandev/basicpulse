@@ -40,8 +40,9 @@ async function ensureFreshToken(config) {
 }
 
 async function refreshToken(config) {
+  // Token refresh always goes to oauth.bitrix.info, not the portal domain
   const url =
-    `https://${config.bitrix_domain}/oauth/token/` +
+    `https://oauth.bitrix.info/oauth/token/` +
     `?grant_type=refresh_token` +
     `&client_id=${encodeURIComponent(config.bitrix_app_id)}` +
     `&client_secret=${encodeURIComponent(config.bitrix_client_secret)}` +
@@ -85,15 +86,35 @@ async function callBitrix(config, method, params = {}) {
 
 // ─── Installation helpers ──────────────────────────────────────────────────────
 
+// WhatsApp-green chat icon as SVG Data URI (required format for Bitrix24)
+const CONNECTOR_ICON =
+  'data:image/svg+xml;charset=US-ASCII,' +
+  '%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%3E' +
+  '%3Cpath%20fill%3D%22%2325D366%22%20d%3D%22M17.472%2014.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15' +
+  '-.197.297-.767.966-.94%201.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475' +
+  '-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52' +
+  '.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207' +
+  '-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198%200-.52.074-.792.372' +
+  '-.272.297-1.04%201.016-1.04%202.479%200%201.462%201.065%202.875%201.213%203.074' +
+  '.149.198%202.096%203.2%205.077%204.487.709.306%201.262.489%201.694.625' +
+  '.712.227%201.36.195%201.871.118.571-.085%201.758-.719%202.006-1.413' +
+  '.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347' +
+  'm-5.421%207.403h-.004a9.87%209.87%200%2001-5.031-1.378l-.361-.214-3.741.982' +
+  '.998-3.648-.235-.374a9.86%209.86%200%2001-1.51-5.26c.001-5.45%204.436-9.884%209.888-9.884' +
+  '%202.64%200%205.122%201.03%206.988%202.898a9.825%209.825%200%20012.893%206.994' +
+  'c-.003%205.45-4.437%209.884-9.885%209.884m8.413-18.297A11.815%2011.815%200%200012.05%200' +
+  'C5.495%200%20.16%205.335.157%2011.892c0%202.096.547%204.142%201.588%205.945L.057%2024' +
+  'l6.305-1.654a11.882%2011.882%200%20005.683%201.448h.005' +
+  'c6.554%200%2011.89-5.335%2011.893-11.893a11.821%2011.821%200%2000-3.48-8.413z%22%2F%3E%3C%2Fsvg%3E';
+
 async function registerConnector(config, appUrl) {
   await callBitrix(config, 'imconnector.register', {
-    ID: CONNECTOR_ID,
-    NAME: 'BasicPulse',
-    ICON: { DATA_IMAGE: '' },
-    IFRAME: `${appUrl}/bitrix/connector`,
-    IFRAME_WIDTH: 800,
-    IFRAME_HEIGHT: 500,
-    PROPERTIES: { COLOR: '#25D366' },
+    ID:                CONNECTOR_ID,
+    NAME:              'BasicPulse',
+    ICON:              { DATA_IMAGE: CONNECTOR_ICON, COLOR: '#25D366' },
+    ICON_DISABLED:     { DATA_IMAGE: CONNECTOR_ICON, COLOR: '#aaaaaa' },
+    PLACEMENT_HANDLER: `${appUrl}/bitrix/connector`,
+    COMMENT:           'WhatsApp connector via SendPulse',
   });
 }
 

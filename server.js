@@ -231,6 +231,11 @@ app.get('/api/debug/webhooks', (_req, res) => res.json(recentPayloads));
 
 // Called by Bitrix24 when the local app is installed
 app.all('/bitrix/install', async (req, res) => {
+  console.log('[bitrix/install] method:', req.method);
+  console.log('[bitrix/install] headers:', JSON.stringify(req.headers));
+  console.log('[bitrix/install] query:', JSON.stringify(req.query));
+  console.log('[bitrix/install] body:', JSON.stringify(req.body));
+
   const p = { ...req.query, ...req.body };
   const { DOMAIN, AUTH_ID, REFRESH_ID, AUTH_EXPIRES, member_id } = p;
 
@@ -261,7 +266,7 @@ app.all('/bitrix/install', async (req, res) => {
     console.log('[bitrix] Credentials saved for', DOMAIN);
   } catch (saveErr) {
     console.error('[bitrix] FAILED to save credentials:', saveErr);
-    return res.status(500).send('Failed to save Bitrix24 credentials: ' + saveErr.message);
+    return res.status(200).json({ status: 'error', errors: { save: saveErr.message } });
   }
 
   // Register connector and event handlers (non-fatal if they fail)
@@ -274,7 +279,8 @@ app.all('/bitrix/install', async (req, res) => {
     console.error('[bitrix] Post-install setup error:', err.message);
   }
 
-  res.redirect(`https://${DOMAIN}/marketplace/app/?app=${appId || 'basicpulse'}`);
+  // Bitrix24 expects {"status":"success"} — NOT a redirect
+  res.status(200).json({ status: 'success' });
 });
 
 // Called by Bitrix24 for all registered events
