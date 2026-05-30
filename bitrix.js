@@ -114,6 +114,7 @@ const CONNECTOR_ICON =
   'c6.554%200%2011.89-5.335%2011.893-11.893a11.821%2011.821%200%2000-3.48-8.413z%22%2F%3E%3C%2Fsvg%3E';
 
 async function registerConnector(config, appUrl) {
+  // Register the connector type
   await callBitrix(config, 'imconnector.register', {
     ID:                CONNECTOR_ID,
     NAME:              'BasicPulse',
@@ -121,6 +122,13 @@ async function registerConnector(config, appUrl) {
     ICON_DISABLED:     { DATA_IMAGE: CONNECTOR_ICON, COLOR: '#aaaaaa' },
     PLACEMENT_HANDLER: `${appUrl}/bitrix/connector`,
     COMMENT:           'WhatsApp connector via SendPulse',
+  });
+
+  // Bind to Contact Center so the connector card appears there
+  await callBitrix(config, 'placement.bind', {
+    PLACEMENT: 'CONTACT_CENTER',
+    HANDLER:   `${appUrl}/bitrix/connector`,
+    TITLE:     'BasicPulse',
   });
 }
 
@@ -142,27 +150,28 @@ async function registerEventHandlers(config, appUrl) {
 async function sendMessageToBitrix(config, conversation, messageText, messageTs) {
   if (!config?.open_channel_id || !config.connector_active) return;
 
-  await callBitrix(config, 'imconnector.send.message', {
+  const ts = Math.floor((messageTs || Date.now()) / 1000);
+
+  await callBitrix(config, 'imconnector.send.messages', {
     CONNECTOR: CONNECTOR_ID,
-    LINE: String(config.open_channel_id),
+    LINE:      String(config.open_channel_id),
     MESSAGES: [
       {
-        id: String(messageTs || Date.now()),
-        chat: {
-          id: conversation.id,
-          name: conversation.contact_name || 'Unknown',
-          url: '',
-        },
         user: {
-          id: conversation.phone || conversation.id,
-          name: conversation.contact_name || 'Unknown',
+          id:    conversation.phone || conversation.id,
+          name:  conversation.contact_name || 'Unknown',
           phone: conversation.phone || '',
-          picture: '',
-          url: '',
         },
-        message: { text: messageText, files: [] },
-        chat_message_status: 'received',
-        timestamp: Math.floor((messageTs || Date.now()) / 1000),
+        message: {
+          id:   String(messageTs || Date.now()),
+          date: ts,
+          text: messageText,
+        },
+        chat: {
+          id:   conversation.id,
+          name: conversation.contact_name || 'Unknown',
+          url:  '',
+        },
       },
     ],
   });

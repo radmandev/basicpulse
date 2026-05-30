@@ -408,16 +408,13 @@ app.post('/api/bitrix/test-message', async (_req, res) => {
     if (!cfg?.bitrix_auth_token) return res.status(400).json({ error: 'Not connected to Bitrix24' });
     if (!cfg?.open_channel_id)  return res.status(400).json({ error: 'No open line configured' });
 
-    await callBitrix(cfg, 'imconnector.send.message', {
+    await callBitrix(cfg, 'imconnector.send.messages', {
       CONNECTOR: 'basicpulse',
       LINE:      String(cfg.open_channel_id),
       MESSAGES: [{
-        id:   String(Date.now()),
-        chat: { id: 'test-contact', name: 'BasicPulse Test', url: '' },
-        user: { id: 'test-contact', name: 'BasicPulse Test', phone: '', picture: '', url: '' },
-        message: { text: '✅ Test message from BasicPulse — connection is working!', files: [] },
-        chat_message_status: 'received',
-        timestamp: Math.floor(Date.now() / 1000),
+        user:    { id: 'test-contact', name: 'BasicPulse Test', phone: '' },
+        message: { id: String(Date.now()), date: Math.floor(Date.now() / 1000), text: 'Test message from BasicPulse — connection is working!' },
+        chat:    { id: 'test-contact', name: 'BasicPulse Test', url: '' },
       }],
     });
 
