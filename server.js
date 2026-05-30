@@ -537,6 +537,31 @@ app.get('/api/bitrix/install-debug', (_req, res) => {
   res.json({ called: true, ...lastInstallRequest });
 });
 
+// Lists all event.bind handlers registered for this app
+app.get('/api/bitrix/event-bindings', async (_req, res) => {
+  try {
+    const cfg = await getBitrixConfig();
+    if (!cfg?.bitrix_auth_token) return res.status(400).json({ error: 'Not connected' });
+    const result = await callBitrix(cfg, 'event.get', {});
+    res.json({ ok: true, events: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Re-bind all event handlers (run this if ONIMCONNECTORMESSAGEADD stops firing)
+app.post('/api/bitrix/rebind-events', async (_req, res) => {
+  try {
+    const cfg    = await getBitrixConfig();
+    if (!cfg?.bitrix_auth_token) return res.status(400).json({ error: 'Not connected' });
+    const appUrl = process.env.APP_URL || 'https://rosybrown-marten-491343.hostingersite.com';
+    await registerEventHandlers(cfg, appUrl);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Lists all registered imconnectors — confirms basicpulse is in the registry
 app.get('/api/bitrix/connector-list', async (_req, res) => {
   try {
