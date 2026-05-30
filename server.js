@@ -238,8 +238,10 @@ app.all('/bitrix/install', async (req, res) => {
     return res.status(400).send('Missing required params: DOMAIN, AUTH_ID');
   }
 
-  const appId       = process.env.BITRIX_APP_ID || '';
-  const clientSecret = process.env.BITRIX_CLIENT_SECRET || '';
+  // Prefer credentials already saved via Settings UI; fall back to env vars
+  const existing    = await getBitrixConfig();
+  const appId       = existing?.bitrix_app_id       || process.env.BITRIX_APP_ID       || '';
+  const clientSecret = existing?.bitrix_client_secret || process.env.BITRIX_CLIENT_SECRET || '';
   const appUrl      = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
 
   const config = {
@@ -359,19 +361,35 @@ app.all('/bitrix/connector', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bitrix-connector.html'));
 });
 
+// Save Bitrix24 App ID + Secret Key entered via the Settings UI
+app.post('/api/bitrix/credentials', async (req, res) => {
+  try {
+    const { app_id, app_secret } = req.body;
+    if (!app_id) return res.status(400).json({ error: 'app_id required' });
+    const updates = { bitrix_app_id: app_id };
+    if (app_secret) updates.bitrix_client_secret = app_secret;
+    await saveBitrixConfig(updates);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Debug endpoint — shows what was saved from the install handler
 app.get('/api/bitrix/debug', async (_req, res) => {
   const cfg = await getBitrixConfig();
   if (!cfg) return res.json({ saved: false });
   res.json({
-    saved: true,
-    domain: cfg.bitrix_domain,
-    member_id: cfg.bitrix_member_id,
-    has_auth_token: !!cfg.bitrix_auth_token,
+    saved:            true,
+    app_id:           cfg.bitrix_app_id   || null,
+    has_secret:       !!cfg.bitrix_client_secret,
+    domain:           cfg.bitrix_domain   || null,
+    member_id:        cfg.bitrix_member_id || null,
+    has_auth_token:   !!cfg.bitrix_auth_token,
     has_refresh_token: !!cfg.bitrix_refresh_token,
     token_expires_at: cfg.bitrix_token_expires_at,
     connector_active: cfg.connector_active,
-    open_channel_id: cfg.open_channel_id,
+    open_channel_id:  cfg.open_channel_id || null,
   });
 });
 
@@ -379,11 +397,12 @@ app.get('/api/bitrix/debug', async (_req, res) => {
 app.get('/api/bitrix/status', async (_req, res) => {
   const cfg = await getBitrixConfig();
   res.json({
-    connected:       !!cfg?.bitrix_auth_token,
-    domain:          cfg?.bitrix_domain   || null,
-    member_id:       cfg?.bitrix_member_id || null,
+    connected:        !!cfg?.bitrix_auth_token,
+    has_credentials:  !!(cfg?.bitrix_app_id && cfg?.bitrix_client_secret),
+    domain:           cfg?.bitrix_domain   || null,
+    member_id:        cfg?.bitrix_member_id || null,
     connector_active: cfg?.connector_active || false,
-    open_channel_id: cfg?.open_channel_id  || null,
+    open_channel_id:  cfg?.open_channel_id  || null,
   });
 });
 

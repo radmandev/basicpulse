@@ -55,6 +55,7 @@
 
     <div>
       <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;">Bitrix24 Integration</h2>
+
       <div id="bx-status" style="
         padding: 10px 14px;
         border-radius: 8px;
@@ -63,16 +64,37 @@
         background: var(--bg);
         border: 1px solid var(--border);
         color: var(--muted);
-        margin-bottom: 12px;
+        margin-bottom: 16px;
       ">Checking…</div>
-      <p style="font-size:13px;color:var(--muted);line-height:1.6">
-        To connect Bitrix24, install the local app from your Bitrix24 portal's
-        <strong>Market → Developer Tools → Local Apps</strong>.<br/>
-        Set the Handler URL to <code id="bx-install-url" style="font-size:12px"></code>
-        and the Event Handler URL to <code id="bx-event-url" style="font-size:12px"></code>.<br/>
-        After installing, configure the Open Line at
-        <a id="bx-connector-link" href="/bitrix/connector" target="_blank"
-           style="color:var(--accent)">Connector Settings</a>.
+
+      <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:16px">
+        <strong style="color:var(--text)">Step 1.</strong> In Bitrix24 go to
+        <strong>Market → Developer Tools → Local Apps → Add</strong>.<br/>
+        Set <strong>Handler path</strong> to <code id="bx-install-url" style="font-size:11px;background:var(--bg);padding:1px 5px;border-radius:4px;border:1px solid var(--border)"></code><br/>
+        Set <strong>Initial installation path</strong> to <code id="bx-event-url" style="font-size:11px;background:var(--bg);padding:1px 5px;border-radius:4px;border:1px solid var(--border)"></code><br/>
+        Save — Bitrix24 immediately shows you the <strong>Application ID</strong> and <strong>Secret Key</strong>.
+      </p>
+
+      <div style="display:flex;flex-direction:column;gap:14px;margin-bottom:16px">
+        <div class="field">
+          <label for="bx-app-id">Bitrix24 Application ID</label>
+          <input type="text" id="bx-app-id" placeholder="e.g. local.6843abc123def456" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="bx-app-secret">Bitrix24 Secret Key</label>
+          <input type="password" id="bx-app-secret" placeholder="••••••••••••" autocomplete="off" />
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="save-btn" id="bx-save-btn">Save Bitrix24 credentials</button>
+        <a href="/bitrix/connector" target="_blank"
+           style="font-size:13px;color:var(--accent)">Open connector settings ↗</a>
+      </div>
+
+      <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">
+        <strong style="color:var(--text)">Step 2.</strong> After saving credentials, install the app inside Bitrix24.<br/>
+        <strong style="color:var(--text)">Step 3.</strong> Open the connector settings above and activate an Open Line.
       </p>
     </div>
 
@@ -114,11 +136,19 @@
     setTimeout(() => t.classList.remove('show'), 2500);
   }
 
-  // Bitrix24 status
+  // Bitrix24 URLs
   const origin = location.origin;
   document.getElementById('bx-install-url').textContent = `${origin}/bitrix/install`;
-  document.getElementById('bx-event-url').textContent   = `${origin}/bitrix/event`;
+  document.getElementById('bx-event-url').textContent   = `${origin}/bitrix/connector`;
 
+  // Load existing Bitrix24 credentials
+  fetch('/api/bitrix/debug')
+    .then(r => r.json())
+    .then(d => {
+      if (d.app_id) document.getElementById('bx-app-id').value = d.app_id;
+    });
+
+  // Bitrix24 status banner
   fetch('/api/bitrix/status')
     .then(r => r.json())
     .then(d => {
@@ -126,14 +156,32 @@
       if (d.connector_active && d.open_channel_id) {
         el.textContent = `✅  Connected to ${d.domain} — routing to Open Line #${d.open_channel_id}`;
         el.style.color = '#16a34a';
+      } else if (d.has_credentials) {
+        el.textContent = `⚪  Credentials saved — install the app in Bitrix24 to complete setup`;
+        el.style.color = 'var(--text)';
       } else if (d.connected) {
         el.textContent = `⚪  Bitrix24 installed on ${d.domain} — connector not yet activated`;
         el.style.color = 'var(--text)';
       } else {
-        el.textContent = '❌  Bitrix24 not installed';
-        el.style.color = '#ef4444';
+        el.textContent = '⚪  Not connected — follow the steps below';
+        el.style.color = 'var(--muted)';
       }
     });
+
+  // Save Bitrix24 credentials
+  document.getElementById('bx-save-btn').addEventListener('click', () => {
+    const appId     = document.getElementById('bx-app-id').value.trim();
+    const appSecret = document.getElementById('bx-app-secret').value.trim();
+    if (!appId) { showToast('Enter the Application ID'); return; }
+    fetch('/api/bitrix/credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ app_id: appId, app_secret: appSecret || undefined }),
+    }).then(r => r.json()).then(d => {
+      if (d.ok) showToast('Bitrix24 credentials saved');
+      else showToast('Error: ' + (d.error || 'unknown'));
+    });
+  });
 
   const dot = document.getElementById('conn-dot');
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
