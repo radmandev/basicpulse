@@ -322,6 +322,7 @@ app.post('/bitrix/event', async (req, res) => {
       // Agent replied inside Bitrix24 — forward each message to WhatsApp via SendPulse.
       // Bitrix24 sends: data.MESSAGES = [{im:{chat_id,message_id}, message:{text}, chat:{id}}]
       // chat.id is the external ID we supplied when calling imconnector.send.messages.
+      const lineId   = String(data?.LINE || data?.line || '');
       const messages = data?.MESSAGES || data?.messages || [];
       if (!messages.length) {
         console.warn('[bitrix/event] ONIMCONNECTORMESSAGEADD with no MESSAGES:', JSON.stringify(data));
@@ -347,12 +348,24 @@ app.post('/bitrix/event', async (req, res) => {
         return;
       }
 
+      const bCfg = await getBitrixConfig();
+
       for (const msg of messages) {
-        const chatId      = msg?.chat?.id || '';
-        const messageText = msg?.message?.text || '';
+        const imData  = msg?.im || {};
+        const chatId  = msg?.chat?.id || '';
+        const rawText = msg?.message?.text || '';
+        // Strip Bitrix24 BBCode formatting before sending to WhatsApp
+        const messageText = rawText
+          .replace(/\[b\](.*?)\[\/b\]/gi, '$1')
+          .replace(/\[i\](.*?)\[\/i\]/gi, '$1')
+          .replace(/\[u\](.*?)\[\/u\]/gi, '$1')
+          .replace(/\[url=[^\]]*\](.*?)\[\/url\]/gi, '$1')
+          .replace(/\[br\]/gi, '\n')
+          .replace(/\[\/?\w+[^\]]*\]/g, '')
+          .trim();
 
         if (!chatId || !messageText) {
-          console.warn('[bitrix/event] Skipping message — missing chat.id or message.text:', JSON.stringify(msg));
+          console.warn('[bitrix/event] Skipping — missing chat.id or text. raw:', JSON.stringify(msg));
           continue;
         }
 
@@ -360,7 +373,7 @@ app.post('/bitrix/event', async (req, res) => {
           .from('conversations').select('*').eq('id', chatId).maybeSingle();
 
         if (!convData?.phone || !convData?.bot_id) {
-          console.error('[bitrix/event] No phone/bot_id for conversation', chatId);
+          console.error('[bitrix/event] No phone/bot_id for chatId:', chatId, '| conv:', JSON.stringify(convData));
           continue;
         }
 
@@ -390,6 +403,19 @@ app.post('/bitrix/event', async (req, res) => {
           const { data: conv } = await supabase.from('conversations').select('*').eq('id', chatId).single();
           broadcast({ type: 'new_message', message: msgData, conversation: conv });
           console.log('[bitrix/event] Outbound message sent to', convData.phone);
+
+          // Confirm delivery back to Bitrix24
+          if (bCfg?.bitrix_auth_token && imData.chat_id && lineId) {
+            callBitrix(bCfg, 'imconnector.send.status.delivery', {
+              CONNECTOR: 'basicpulse',
+              LINE:      lineId,
+              MESSAGES: [{
+                im:      imData,
+                message: { id: [String(ts)] },
+                chat:    { id: chatId },
+              }],
+            }).catch(e => console.warn('[bitrix/event] delivery status error:', e.message));
+          }
         } else {
           const errText = await sendRes.text();
           console.error('[bitrix/event] SendPulse send failed:', errText);
@@ -430,6 +456,7 @@ app.post('/bitrix/connector', async (req, res) => {
   if (event === 'ONIMCONNECTORMESSAGEADD') {
     res.send('ok');
     const data = p.data || p.DATA || {};
+    const lineId = String(data?.LINE || data?.line || '');
     const messages = data?.MESSAGES || data?.messages || [];
     if (!messages.length) {
       console.warn('[bitrix/connector] ONIMCONNECTORMESSAGEADD — no MESSAGES:', JSON.stringify(data));
@@ -448,15 +475,31 @@ app.post('/bitrix/connector', async (req, res) => {
       const { access_token } = await tokenRes.json();
       if (!access_token) return;
 
+      const bCfg = await getBitrixConfig();
+
       for (const msg of messages) {
+        const imData      = msg?.im   || {};
         const chatId      = msg?.chat?.id || '';
-        const messageText = msg?.message?.text || '';
-        if (!chatId || !messageText) continue;
+        const rawText     = msg?.message?.text || '';
+        // Strip Bitrix24 BBCode formatting before sending to WhatsApp
+        const messageText = rawText
+          .replace(/\[b\](.*?)\[\/b\]/gi, '$1')
+          .replace(/\[i\](.*?)\[\/i\]/gi, '$1')
+          .replace(/\[u\](.*?)\[\/u\]/gi, '$1')
+          .replace(/\[url=[^\]]*\](.*?)\[\/url\]/gi, '$1')
+          .replace(/\[br\]/gi, '\n')
+          .replace(/\[\/?\w+[^\]]*\]/g, '')
+          .trim();
+
+        if (!chatId || !messageText) {
+          console.warn('[bitrix/connector] Skipping — missing chat.id or text. raw:', JSON.stringify(msg));
+          continue;
+        }
 
         const { data: convData } = await supabase
           .from('conversations').select('*').eq('id', chatId).maybeSingle();
         if (!convData?.phone || !convData?.bot_id) {
-          console.error('[bitrix/connector] No phone/bot_id for conversation', chatId);
+          console.error('[bitrix/connector] No phone/bot_id for chatId:', chatId, '| conv:', JSON.stringify(convData));
           continue;
         }
 
@@ -476,8 +519,22 @@ app.post('/bitrix/connector', async (req, res) => {
           const { data: conv } = await supabase.from('conversations').select('*').eq('id', chatId).single();
           broadcast({ type: 'new_message', message: msgData, conversation: conv });
           console.log('[bitrix/connector] Outbound sent to', convData.phone);
+
+          // Confirm delivery back to Bitrix24 so the message shows as delivered
+          if (bCfg?.bitrix_auth_token && imData.chat_id && lineId) {
+            callBitrix(bCfg, 'imconnector.send.status.delivery', {
+              CONNECTOR: 'basicpulse',
+              LINE:      lineId,
+              MESSAGES: [{
+                im:      imData,
+                message: { id: [String(ts)] },
+                chat:    { id: chatId },
+              }],
+            }).catch(e => console.warn('[bitrix/connector] delivery status error:', e.message));
+          }
         } else {
-          console.error('[bitrix/connector] SendPulse error:', await sendRes.text());
+          const errText = await sendRes.text();
+          console.error('[bitrix/connector] SendPulse error:', errText);
         }
       }
     } catch (err) {
