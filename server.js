@@ -44,6 +44,7 @@ function stripBBCode(text) {
 }
 
 async function pollBitrixReplies() {
+  try {
   if (!bitrixChatSessions.size) return;
   let bCfg;
   try { bCfg = await getBitrixConfig(); } catch (e) { return; }
@@ -128,6 +129,9 @@ async function pollBitrixReplies() {
     } catch (err) {
       console.error('[bitrix poll] Error for conv', convId, ':', err.message);
     }
+  }
+  } catch (err) {
+    console.error('[bitrix poll] Outer error:', err.message);
   }
 }
 
@@ -1000,6 +1004,8 @@ app.post('/api/bitrix/disconnect', async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.get('/api/version', (_req, res) => res.json({ version: 'v8', started: new Date().toISOString() }));
 
 // Shows active polling sessions — useful to verify chatId was captured
 app.get('/api/bitrix/poll-sessions', (_req, res) => {
