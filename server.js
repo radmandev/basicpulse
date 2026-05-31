@@ -224,6 +224,13 @@ app.post('/webhook', async (req, res) => {
           : null;
         const chatId      = firstVal?.CHAT_ID;
         const extUserId   = firstVal?.CONTACTS?.[0]?.ID;
+        recentBitrixEvents.unshift({
+          ts: new Date().toISOString(), event: 'FORWARD_OK',
+          conv_id: conv.id, chatId: chatId || null,
+          bxResult: JSON.stringify(bxResult).slice(0, 300),
+        });
+        if (recentBitrixEvents.length > 20) recentBitrixEvents.pop();
+
         if (chatId) {
           const existing = bitrixChatSessions.get(conv.id) || {};
           bitrixChatSessions.set(conv.id, {
@@ -231,12 +238,16 @@ app.post('/webhook', async (req, res) => {
             chatId,
             externalUserId: extUserId || existing.externalUserId,
           });
-          console.log('[webhook] Tracking Bitrix24 chat', chatId, 'for conv', conv.id, '| extUser:', extUserId);
+          // Persist so sessions survive server restarts
+          supabase.from('conversations')
+            .update({ bitrix_chat_id: String(chatId) })
+            .eq('id', conv.id)
+            .then(() => {})
+            .catch(() => {}); // column may not exist yet — silent
+          console.log('[webhook] Tracking Bitrix24 chat', chatId, 'for conv', conv.id);
         } else {
-          console.log('[webhook] imconnector result (no chatId):', JSON.stringify(bxResult).slice(0, 200));
+          console.log('[webhook] imconnector result (no CHAT_ID):', JSON.stringify(bxResult).slice(0, 300));
         }
-        recentBitrixEvents.unshift({ ts: new Date().toISOString(), event: 'FORWARD_OK', conv_id: conv.id, chatId });
-        if (recentBitrixEvents.length > 20) recentBitrixEvents.pop();
       }
     } catch (bErr) {
       console.error('[webhook] Bitrix24 forward error:', bErr.message);
@@ -1010,6 +1021,24 @@ async function start() {
   }
   if (process.env.SENDPULSE_CLIENT_SECRET) {
     await supabase.from('settings').upsert({ key: 'client_secret', value: process.env.SENDPULSE_CLIENT_SECRET }, { onConflict: 'key' });
+  }
+
+  // Restore Bitrix24 chat sessions from Supabase so polling works after restarts.
+  // Requires a `bitrix_chat_id` text column on the conversations table.
+  try {
+    const { data: convs } = await supabase
+      .from('conversations')
+      .select('id, bitrix_chat_id')
+      .not('bitrix_chat_id', 'is', null);
+    for (const c of convs || []) {
+      if (c.bitrix_chat_id) {
+        bitrixChatSessions.set(c.id, { chatId: c.bitrix_chat_id });
+        console.log('[start] Restored session for conv', c.id, '→ Bitrix24 chat', c.bitrix_chat_id);
+      }
+    }
+    if ((convs || []).length) console.log('[start] Restored', convs.length, 'Bitrix24 session(s)');
+  } catch (err) {
+    console.warn('[start] Could not restore sessions (bitrix_chat_id column may not exist yet):', err.message);
   }
 
   const PORT = process.env.PORT || 3000;
