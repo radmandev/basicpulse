@@ -29,6 +29,113 @@ function broadcast(data) {
   });
 }
 
+// ─── Bitrix24 reply polling ───────────────────────────────────────────────────
+// event.bind delivery from Bitrix24 cloud → Hostinger is unreliable (network/
+// firewall), so we poll im.dialog.messages.get every 8 s as a reliable fallback.
+
+// convId → { chatId, externalUserId, lastMsgId }
+const bitrixChatSessions = new Map();
+const processedBitrixMsgIds = new Set(); // dedup within process lifetime
+
+function stripBBCode(text) {
+  return String(text)
+    .replace(/\[b\](.*?)\[\/b\]/gi, '$1')
+    .replace(/\[i\](.*?)\[\/i\]/gi, '$1')
+    .replace(/\[u\](.*?)\[\/u\]/gi, '$1')
+    .replace(/\[url=[^\]]*\](.*?)\[\/url\]/gi, '$1')
+    .replace(/\[br\]/gi, '\n')
+    .replace(/\[\/?\w+[^\]]*\]/g, '')
+    .trim();
+}
+
+async function pollBitrixReplies() {
+  if (!bitrixChatSessions.size) return;
+  let bCfg;
+  try { bCfg = await getBitrixConfig(); } catch { return; }
+  if (!bCfg?.bitrix_auth_token || !bCfg?.connector_active) return;
+
+  const { data: spSettings } = await supabase.from('settings').select('key, value');
+  const sp = Object.fromEntries((spSettings || []).map(r => [r.key, r.value]));
+  if (!sp.client_id || !sp.client_secret) return;
+
+  let access_token;
+  try {
+    const r = await fetch('https://api.sendpulse.com/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'client_credentials', client_id: sp.client_id, client_secret: sp.client_secret }),
+    });
+    ({ access_token } = await r.json());
+  } catch { return; }
+  if (!access_token) return;
+
+  for (const [convId, session] of bitrixChatSessions) {
+    if (!session.chatId) continue;
+    try {
+      const result = await callBitrix(bCfg, 'im.dialog.messages.get', {
+        DIALOG_ID: `chat${session.chatId}`,
+        LIMIT: 20,
+      });
+
+      const rawMsgs = result?.messages || result?.MESSAGES || {};
+      const msgs = Array.isArray(rawMsgs) ? rawMsgs : Object.values(rawMsgs);
+      let newLastId = session.lastMsgId || 0;
+
+      for (const msg of msgs) {
+        const msgId = Number(msg.id || msg.ID || 0);
+        if (!msgId || msgId <= (session.lastMsgId || 0)) continue;
+        if (processedBitrixMsgIds.has(msgId)) continue;
+        newLastId = Math.max(newLastId, msgId);
+
+        const authorId = Number(msg.authorId || msg.AUTHOR_ID || msg.FROM_USER_ID || 0);
+        // Skip messages the customer sent (forwarded by us to Bitrix24)
+        if (session.externalUserId && authorId === Number(session.externalUserId)) continue;
+        // Skip system / empty
+        if (msg.system || msg.SYSTEM) continue;
+        const text = stripBBCode(msg.text || msg.MESSAGE || '');
+        if (!text) continue;
+
+        const { data: convData } = await supabase.from('conversations').select('*').eq('id', convId).maybeSingle();
+        if (!convData?.phone || !convData?.bot_id) {
+          console.error('[bitrix poll] No phone/bot_id for conv', convId);
+          continue;
+        }
+
+        const sendRes = await fetch('https://api.sendpulse.com/whatsapp/contacts/sendByPhone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` },
+          body: JSON.stringify({ bot_id: convData.bot_id, phone: convData.phone, message: { type: 'text', text: { body: text } } }),
+        });
+
+        if (sendRes.ok) {
+          processedBitrixMsgIds.add(msgId);
+          const ts = Date.now();
+          const { data: msgData } = await supabase.from('messages').insert({
+            conversation_id: convId, body: text, direction: 'out', ts,
+          }).select().single();
+          await supabase.from('conversations').update({ last_message: text, last_time: ts }).eq('id', convId);
+          const { data: conv } = await supabase.from('conversations').select('*').eq('id', convId).single();
+          broadcast({ type: 'new_message', message: msgData, conversation: conv });
+          console.log('[bitrix poll] Agent reply sent → phone', convData.phone, '| text:', text.slice(0, 60));
+        } else {
+          console.error('[bitrix poll] SendPulse error:', await sendRes.text());
+        }
+      }
+
+      session.lastMsgId = newLastId;
+      bitrixChatSessions.set(convId, session);
+
+      // Prevent Set from growing unbounded
+      if (processedBitrixMsgIds.size > 2000) {
+        const arr = [...processedBitrixMsgIds];
+        arr.slice(0, 1000).forEach(id => processedBitrixMsgIds.delete(id));
+      }
+    } catch (err) {
+      console.error('[bitrix poll] Error for conv', convId, ':', err.message);
+    }
+  }
+}
+
 // ─── Webhook ────────────────────────────────────────────────────────────────
 
 const recentPayloads = [];
@@ -108,8 +215,27 @@ app.post('/webhook', async (req, res) => {
     try {
       const bCfg = await getBitrixConfig();
       if (bCfg?.connector_active) {
-        await sendMessageToBitrix(bCfg, conv, text, ts);
-        recentBitrixEvents.unshift({ ts: new Date().toISOString(), event: 'FORWARD_OK', conv_id: conv.id });
+        const bxResult = await sendMessageToBitrix(bCfg, conv, text, ts);
+        // Capture Bitrix24 chat ID for reply polling
+        // imconnector.send.messages returns { CHAT_ID, SESSION_ID, CONTACTS: [{ID, USER_CODE}] }
+        // or an object keyed by session id — handle both shapes.
+        const firstVal = bxResult && typeof bxResult === 'object'
+          ? (bxResult.CHAT_ID ? bxResult : Object.values(bxResult)[0])
+          : null;
+        const chatId      = firstVal?.CHAT_ID;
+        const extUserId   = firstVal?.CONTACTS?.[0]?.ID;
+        if (chatId) {
+          const existing = bitrixChatSessions.get(conv.id) || {};
+          bitrixChatSessions.set(conv.id, {
+            ...existing,
+            chatId,
+            externalUserId: extUserId || existing.externalUserId,
+          });
+          console.log('[webhook] Tracking Bitrix24 chat', chatId, 'for conv', conv.id, '| extUser:', extUserId);
+        } else {
+          console.log('[webhook] imconnector result (no chatId):', JSON.stringify(bxResult).slice(0, 200));
+        }
+        recentBitrixEvents.unshift({ ts: new Date().toISOString(), event: 'FORWARD_OK', conv_id: conv.id, chatId });
         if (recentBitrixEvents.length > 20) recentBitrixEvents.pop();
       }
     } catch (bErr) {
@@ -869,6 +995,13 @@ app.post('/api/bitrix/disconnect', async (_req, res) => {
   }
 });
 
+// Shows active polling sessions — useful to verify chatId was captured
+app.get('/api/bitrix/poll-sessions', (_req, res) => {
+  const sessions = {};
+  for (const [k, v] of bitrixChatSessions) sessions[k] = v;
+  res.json({ count: bitrixChatSessions.size, sessions });
+});
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 
 async function start() {
@@ -883,6 +1016,9 @@ async function start() {
   server.listen(PORT, () => {
     console.log(`BasicPulse running at http://localhost:${PORT}`);
   });
+
+  // Poll Bitrix24 for agent replies — fallback for when event.bind delivery fails
+  setInterval(pollBitrixReplies, 8000);
 }
 
 start();

@@ -150,20 +150,16 @@ async function registerConnector(config, appUrl) {
 }
 
 async function registerEventHandlers(config, appUrl) {
-  // Bind to /bitrix/connector — same URL as PLACEMENT_HANDLER, matching the
-  // Bitrix24 tutorial pattern. Bitrix24 routes ONIMCONNECTORMESSAGEADD to the
-  // PLACEMENT_HANDLER, not necessarily to a separate event.bind URL.
   for (const event of [
     'ONIMCONNECTORMESSAGEADD',
     'ONIMCONNECTORSTATUSDELETE',
     'ONAPPUNINSTALL',
   ]) {
-    try {
-      await callBitrix(config, 'event.unbind', {
-        EVENT:   event,
-        HANDLER: `${appUrl}/bitrix/event`,
-      });
-    } catch (_) {}
+    // Unbind any previously registered URLs (old and current) before rebinding
+    // fresh — prevents duplicate deliveries and stale registrations.
+    for (const old of [`${appUrl}/bitrix/event`, `${appUrl}/bitrix/connector`]) {
+      try { await callBitrix(config, 'event.unbind', { EVENT: event, HANDLER: old }); } catch (_) {}
+    }
     await callBitrix(config, 'event.bind', {
       EVENT:   event,
       HANDLER: `${appUrl}/bitrix/connector`,
@@ -188,7 +184,7 @@ async function sendMessageToBitrix(config, conversation, messageText, messageTs)
     .slice(0, 25);
   const userName = asciiName || (`WA ${conversation.phone || conversation.id}`).slice(0, 25);
 
-  await callBitrix(config, 'imconnector.send.messages', {
+  return await callBitrix(config, 'imconnector.send.messages', {
     CONNECTOR: CONNECTOR_ID,
     LINE:      String(config.open_channel_id),
     MESSAGES: [
