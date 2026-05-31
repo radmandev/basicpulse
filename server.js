@@ -13,13 +13,8 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-app.use(express.json({
-  verify: (req, _res, buf) => { req.rawBody = buf.toString(); },
-}));
-app.use(express.urlencoded({
-  extended: true,
-  verify: (req, _res, buf) => { req.rawBody = buf.toString(); },
-}));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 function broadcast(data) {
@@ -51,7 +46,7 @@ function stripBBCode(text) {
 async function pollBitrixReplies() {
   if (!bitrixChatSessions.size) return;
   let bCfg;
-  try { bCfg = await getBitrixConfig(); } catch { return; }
+  try { bCfg = await getBitrixConfig(); } catch (e) { return; }
   if (!bCfg?.bitrix_auth_token || !bCfg?.connector_active) return;
 
   const { data: spSettings } = await supabase.from('settings').select('key, value');
@@ -66,7 +61,7 @@ async function pollBitrixReplies() {
       body: JSON.stringify({ grant_type: 'client_credentials', client_id: sp.client_id, client_secret: sp.client_secret }),
     });
     ({ access_token } = await r.json());
-  } catch { return; }
+  } catch (e) { return; }
   if (!access_token) return;
 
   for (const [convId, session] of bitrixChatSessions) {
@@ -1023,27 +1018,24 @@ async function start() {
     await supabase.from('settings').upsert({ key: 'client_secret', value: process.env.SENDPULSE_CLIENT_SECRET }, { onConflict: 'key' });
   }
 
-  // Restore Bitrix24 chat sessions from Supabase so polling works after restarts.
-  // Requires a `bitrix_chat_id` text column on the conversations table.
-  try {
-    const { data: convs } = await supabase
-      .from('conversations')
-      .select('id, bitrix_chat_id')
-      .not('bitrix_chat_id', 'is', null);
-    for (const c of convs || []) {
-      if (c.bitrix_chat_id) {
-        bitrixChatSessions.set(c.id, { chatId: c.bitrix_chat_id });
-        console.log('[start] Restored session for conv', c.id, '→ Bitrix24 chat', c.bitrix_chat_id);
-      }
-    }
-    if ((convs || []).length) console.log('[start] Restored', convs.length, 'Bitrix24 session(s)');
-  } catch (err) {
-    console.warn('[start] Could not restore sessions (bitrix_chat_id column may not exist yet):', err.message);
-  }
-
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, () => {
     console.log(`BasicPulse running at http://localhost:${PORT}`);
+
+    // Restore Bitrix24 chat sessions AFTER the server is already listening so a
+    // slow/failing Supabase query never blocks port binding.
+    supabase.from('conversations')
+      .select('id, bitrix_chat_id')
+      .not('bitrix_chat_id', 'is', null)
+      .then(({ data: convs }) => {
+        for (const c of convs || []) {
+          if (c.bitrix_chat_id) {
+            bitrixChatSessions.set(c.id, { chatId: c.bitrix_chat_id });
+            console.log('[start] Restored session conv', c.id, '→ chatId', c.bitrix_chat_id);
+          }
+        }
+      })
+      .catch(err => console.warn('[start] Could not restore sessions:', err.message));
   });
 
   // Poll Bitrix24 for agent replies — fallback for when event.bind delivery fails
