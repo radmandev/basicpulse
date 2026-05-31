@@ -1010,20 +1010,27 @@ app.get('/api/bitrix/poll-sessions', (_req, res) => {
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 
-async function start() {
+// Catch any unhandled errors so the process stays alive
+process.on('uncaughtException',  err => console.error('[uncaughtException]', err.message));
+process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
+
+server.on('error', err => console.error('[server error]', err.message));
+
+function start() {
+  // Sync env-var credentials to Supabase settings — fire-and-forget so they
+  // never block the port from binding.
   if (process.env.SENDPULSE_CLIENT_ID) {
-    await supabase.from('settings').upsert({ key: 'client_id', value: process.env.SENDPULSE_CLIENT_ID }, { onConflict: 'key' });
+    supabase.from('settings').upsert({ key: 'client_id', value: process.env.SENDPULSE_CLIENT_ID }, { onConflict: 'key' }).catch(() => {});
   }
   if (process.env.SENDPULSE_CLIENT_SECRET) {
-    await supabase.from('settings').upsert({ key: 'client_secret', value: process.env.SENDPULSE_CLIENT_SECRET }, { onConflict: 'key' });
+    supabase.from('settings').upsert({ key: 'client_secret', value: process.env.SENDPULSE_CLIENT_SECRET }, { onConflict: 'key' }).catch(() => {});
   }
 
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, () => {
-    console.log(`BasicPulse running at http://localhost:${PORT}`);
+    console.log(`BasicPulse running on port ${PORT}`);
 
-    // Restore Bitrix24 chat sessions AFTER the server is already listening so a
-    // slow/failing Supabase query never blocks port binding.
+    // Restore Bitrix24 chat sessions in the background — never blocks startup
     supabase.from('conversations')
       .select('id, bitrix_chat_id')
       .not('bitrix_chat_id', 'is', null)
@@ -1038,7 +1045,6 @@ async function start() {
       .catch(err => console.warn('[start] Could not restore sessions:', err.message));
   });
 
-  // Poll Bitrix24 for agent replies — fallback for when event.bind delivery fails
   setInterval(pollBitrixReplies, 8000);
 }
 
