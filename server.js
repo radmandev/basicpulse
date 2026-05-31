@@ -104,9 +104,13 @@ app.post('/webhook', async (req, res) => {
       const bCfg = await getBitrixConfig();
       if (bCfg?.connector_active) {
         await sendMessageToBitrix(bCfg, conv, text, ts);
+        recentBitrixEvents.unshift({ ts: new Date().toISOString(), event: 'FORWARD_OK', conv_id: conv.id });
+        if (recentBitrixEvents.length > 20) recentBitrixEvents.pop();
       }
     } catch (bErr) {
       console.error('[webhook] Bitrix24 forward error:', bErr.message);
+      recentBitrixEvents.unshift({ ts: new Date().toISOString(), event: 'FORWARD_ERROR', error: bErr.message, conv_id: conv?.id });
+      if (recentBitrixEvents.length > 20) recentBitrixEvents.pop();
     }
 
     res.status(200).json({ ok: true });

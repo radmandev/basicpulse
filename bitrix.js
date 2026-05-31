@@ -178,15 +178,26 @@ async function sendMessageToBitrix(config, conversation, messageText, messageTs)
 
   const ts = Math.floor((messageTs || Date.now()) / 1000);
 
+  // Bitrix24 name field: letters/spaces/hyphens/apostrophes only, max 25 chars.
+  // Strip non-ASCII (Arabic, Cyrillic, etc.) and fall back to phone or 'User'.
+  const rawName = conversation.contact_name || '';
+  const asciiName = rawName
+    .replace(/[^\x00-\x7F]/g, '')
+    .replace(/[^a-zA-Z\s\-']/g, '')
+    .trim()
+    .slice(0, 25);
+  const userName = asciiName || (`WA ${conversation.phone || conversation.id}`).slice(0, 25);
+
   await callBitrix(config, 'imconnector.send.messages', {
     CONNECTOR: CONNECTOR_ID,
     LINE:      String(config.open_channel_id),
     MESSAGES: [
       {
         user: {
-          id:    conversation.phone || conversation.id,
-          name:  conversation.contact_name || 'Unknown',
-          phone: conversation.phone || '',
+          id:                  String(conversation.id),
+          name:                userName,
+          phone:               conversation.phone || '',
+          skip_phone_validate: 'Y',
         },
         message: {
           id:   String(messageTs || Date.now()),
@@ -194,7 +205,7 @@ async function sendMessageToBitrix(config, conversation, messageText, messageTs)
           text: messageText,
         },
         chat: {
-          id:   conversation.id,
+          id:   String(conversation.id),
           name: conversation.contact_name || 'Unknown',
           url:  '',
         },
