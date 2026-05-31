@@ -13,8 +13,13 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf.toString(); },
+}));
+app.use(express.urlencoded({
+  extended: true,
+  verify: (req, _res, buf) => { req.rawBody = buf.toString(); },
+}));
 app.use(express.static(path.join(__dirname, 'public')));
 
 function broadcast(data) {
@@ -448,11 +453,20 @@ app.get('/bitrix/connector', (_req, res) => {
 // Handles: SETTING_CONNECTOR activation, outgoing message events, auth token capture.
 app.post('/bitrix/connector', async (req, res) => {
   const p = req.body;
-  console.log('[bitrix/connector POST]', JSON.stringify(p).slice(0, 600));
+  const rawSnippet = (req.rawBody || '').slice(0, 800);
+  console.log('[bitrix/connector POST] ct:', req.headers['content-type'], 'raw:', rawSnippet);
 
-  // Log to event store for diagnostics
-  const evtName = p.event || p.EVENT || p.PLACEMENT || '';
-  recentBitrixEvents.unshift({ ts: new Date().toISOString(), via: 'connector', event: evtName, body: p });
+  // Log to event store for diagnostics — include raw body snippet so we can
+  // see the exact format Bitrix24 sends even if parsing fails.
+  const evtName = p.event || p.EVENT || p.PLACEMENT || '(unknown)';
+  recentBitrixEvents.unshift({
+    ts: new Date().toISOString(),
+    via: 'connector',
+    event: evtName,
+    content_type: req.headers['content-type'] || '',
+    body: p,
+    raw: rawSnippet,
+  });
   if (recentBitrixEvents.length > 20) recentBitrixEvents.pop();
 
   // ── Outgoing message: agent replied in Open Line ──────────────────────────
